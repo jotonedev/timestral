@@ -1,8 +1,6 @@
 """Command line interface for training Timestral models from scratch or fine-tuning with JAX."""
 
 import argparse
-import os
-from pathlib import Path
 
 from timestral.config import TimestralConfig
 from timestral.data.dataset import SyntheticDataset
@@ -10,11 +8,33 @@ from timestral.jax.conversion import load_flax_model_from_safetensors
 from timestral.jax.model import TimestralModel
 from timestral.training.trainer import Trainer, TrainingConfig
 
-KNOTS = (0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
-         0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99)
+KNOTS = (
+    0.01,
+    0.05,
+    0.1,
+    0.15,
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7,
+    0.75,
+    0.8,
+    0.85,
+    0.9,
+    0.95,
+    0.99,
+)
 
 
 def parse_args():
+    """Parse command line arguments for Timestral training."""
     parser = argparse.ArgumentParser(description="Train Timestral from scratch with JAX/Flax")
     # Model architecture
     parser.add_argument("--patch_size", type=int, default=8, help="Time steps per patch")
@@ -23,7 +43,9 @@ def parse_args():
     parser.add_argument("--mlp_hidden_dim", type=int, default=128, help="SwiGLU hidden dim")
     parser.add_argument("--num_layers", type=int, default=4, help="Number of transformer layers")
     parser.add_argument("--block_size", type=int, default=4, help="Max patches per decode block")
-    parser.add_argument("--context_length", type=int, default=256, help="Trained context length cap")
+    parser.add_argument(
+        "--context_length", type=int, default=256, help="Trained context length cap"
+    )
 
     # Training hyperparams
     parser.add_argument("--steps", type=int, default=1000, help="Total training steps")
@@ -36,12 +58,15 @@ def parse_args():
     parser.add_argument("--save_every", type=int, default=500, help="Checkpoint interval")
     parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--init_from_pretrained", type=str, default=None, help="Checkpoint to initialize from")
+    parser.add_argument(
+        "--init_from_pretrained", type=str, default=None, help="Checkpoint to initialize from"
+    )
 
     return parser.parse_args()
 
 
 def main():
+    """Execute training CLI entrypoint."""
     args = parse_args()
 
     # Define alternating time and variate block schedule

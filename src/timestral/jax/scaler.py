@@ -5,7 +5,6 @@ that patch, so the context never sees future statistics. Forecasts come back in 
 normalized (asinh) space of the last context patch and are inverted with sinh.
 """
 
-from typing import Tuple
 import jax
 import jax.numpy as jnp
 
@@ -16,7 +15,7 @@ def compute_causal_statistics(
     minimum_scale: float,
     stabilize_with_global: bool,
     scale_factor_exponent: float = 10.0,
-) -> Tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array]:
     """Causal running mean and std along the last axis (Welford form, in float64).
 
     Returns `(means, scales)`, both shaped like `data`; position `t` uses the observed
@@ -57,7 +56,7 @@ def causal_patch_loc_scale(
     patch_size: int,
     minimum_scale: float,
     stabilize_with_global: bool,
-) -> Tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array]:
     """Per-patch `(loc, scale)` broadcast back to every time step of the patch.
 
     Each patch uses the causal statistics at its last time step, i.e. everything
@@ -67,7 +66,9 @@ def causal_patch_loc_scale(
     assert t % patch_size == 0, f"length {t} is not a multiple of patch_size {patch_size}"
     n_patches = t // patch_size
 
-    means, scales = compute_causal_statistics(data, observation_mask, minimum_scale, stabilize_with_global)
+    means, scales = compute_causal_statistics(
+        data, observation_mask, minimum_scale, stabilize_with_global
+    )
 
     leading_shape = data.shape[:-1]
     patch_means = means.reshape(*leading_shape, n_patches, patch_size)[..., -1]
@@ -89,14 +90,18 @@ def apply_affine_asinh_masked(
     work_dtype = jnp.promote_types(data.dtype, jnp.float32)
     work_eps = jnp.finfo(work_dtype).eps
 
-    scaled = (data.astype(work_dtype) - loc.astype(work_dtype)) / jnp.maximum(scale.astype(work_dtype), work_eps)
+    scaled = (data.astype(work_dtype) - loc.astype(work_dtype)) / jnp.maximum(
+        scale.astype(work_dtype), work_eps
+    )
     scaled = jnp.where(observation_mask, scaled, 0.0)
     if use_asinh:
         scaled = jnp.where(observation_mask, jnp.arcsinh(scaled), scaled)
     return scaled.astype(data.dtype)
 
 
-def invert_affine_asinh(x: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool) -> jax.Array:
+def invert_affine_asinh(
+    x: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool
+) -> jax.Array:
     """Inverse of the forward transform: `sinh(x) * scale + loc`."""
     work_dtype = jnp.promote_types(x.dtype, jnp.float32)
     xw = x.astype(work_dtype)
@@ -117,15 +122,21 @@ def clamp_nonfinite(vals: jax.Array) -> jax.Array:
     return jnp.where(jnp.isinf(clamped), 0.0, clamped)
 
 
-def denormalize_quantiles(preds: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool) -> jax.Array:
+def denormalize_quantiles(
+    preds: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool
+) -> jax.Array:
     """Invert normalization and clamp infinities; monotone quantiles stay in order."""
     return clamp_nonfinite(invert_affine_asinh(preds, loc, scale, use_asinh))
 
 
 def welford_combine(
-    w_a: jax.Array, mean_a: jax.Array, m2_a: jax.Array,
-    w_b: jax.Array, mean_b: jax.Array, m2_b: jax.Array,
-) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    w_a: jax.Array,
+    mean_a: jax.Array,
+    m2_a: jax.Array,
+    w_b: jax.Array,
+    mean_b: jax.Array,
+    m2_b: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Merge two Welford states `(weight, mean, m2)` element-wise; `(0, 0, 0)` is identity."""
     w = w_a + w_b
     w_safe = jnp.maximum(w, jnp.finfo(w.dtype).tiny)
@@ -138,7 +149,9 @@ def welford_combine(
     return w, mean, m2
 
 
-def cumulative_welford(w: jax.Array, mean: jax.Array, m2: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+def cumulative_welford(
+    w: jax.Array, mean: jax.Array, m2: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Inclusive prefix scan of Welford states along dim 1."""
     n = w.shape[1]
     d = 1
@@ -157,7 +170,7 @@ def advancing_block_frames(
     observation_mask: jax.Array,
     sinh_median: jax.Array,
     minimum_scale: float,
-) -> Tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array]:
     """Per-patch `(loc, scale)` of a decoded block in advancing refine frame."""
     r, n_pred, ps = sinh_median.shape
     blank = jnp.zeros((r, n_pred, ps), dtype=sinh_median.dtype)
@@ -187,7 +200,9 @@ def advancing_block_frames(
         scale = jnp.maximum(jnp.sqrt(var), minimum_scale)
         locs.append(mean)
         scales.append(scale)
-        folded = jnp.clip(sinh_median[:, h] * scale[:, None] + mean[:, None] - offset[:, None], -clip, clip)
+        folded = jnp.clip(
+            sinh_median[:, h] * scale[:, None] + mean[:, None] - offset[:, None], -clip, clip
+        )
         folded = folded + offset[:, None]
         b_mean = folded.mean(axis=-1)
         b_m2 = jnp.square(folded - b_mean[:, None]).sum(axis=-1)
@@ -200,7 +215,7 @@ def instance_norm_stats(
     values: jax.Array,
     observation_mask: jax.Array,
     minimum_scale: float = 1e-6,
-) -> Tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Non-causal per-row mean/std over observed positions, for known-future covariates."""
     orig_dtype = values.dtype
     stat_dtype = jnp.promote_types(orig_dtype, jnp.float32)
@@ -211,7 +226,9 @@ def instance_norm_stats(
     var = (((x - loc) * mask_f) ** 2).sum(axis=-1, keepdims=True) / n
     scale = jnp.maximum(jnp.sqrt(var), minimum_scale)
 
-    is_zero_one = ((values == 0.0) | (values == 1.0) | ~observation_mask).all(axis=-1, keepdims=True)
+    is_zero_one = ((values == 0.0) | (values == 1.0) | ~observation_mask).all(
+        axis=-1, keepdims=True
+    )
     is_binary = is_zero_one & observation_mask.any(axis=-1, keepdims=True)
     loc = jnp.where(is_binary, 0.0, loc)
     scale = jnp.where(is_binary, 1.0, scale)

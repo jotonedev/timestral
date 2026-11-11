@@ -1,14 +1,17 @@
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
 
 [project]
 name = "timestral"
 version = "1.0.0"
-description = "Standalone inference for Timestral time-series forecasting models"
+description = "Standalone inference and training for Timestral time-series forecasting models"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+authors = [
+    { name = "John Toniutti", email = "john.toniutti@gmail.com" }
+]
 requires-python = ">=3.10"
 dependencies = [
     "huggingface_hub>=0.23",
@@ -22,11 +25,62 @@ dependencies = [
     "scikit-learn>=1.3",
 ]
 
-[dependency-groups]
-dev = ["pytest>=8"]
+[project.scripts]
+timestral-train = "timestral.train:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.3.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.20",
+    "ty>=0.0.55",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src", "."]
+addopts = "--strict-markers -ra"
+timeout = 30
+timeout_method = "thread"
+
+[tool.coverage.run]
+source = ["timestral"]
+branch = true
+omit = ["timestral/*/__main__.py", "tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
 
 [tool.ruff]
-line-length = 120
+exclude = ["__init__.py"]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I", "D", "PLC0415", "C901", "PLR0912", "PLR0915"]
+ignore = ["D417", "D107", "D105", "D100", "E731"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.per-file-ignores]
+# Complexity rules target production code, not test scaffolding (builders/fixtures often
+# take many keyword args by design).
+"tests/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]
+"*_test.py" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]
+
+[tool.uv]
+package = true
+default-groups = ["dev"]

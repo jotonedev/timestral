@@ -1,9 +1,11 @@
 """Datasets and batch iterators for Timestral training."""
 
 import math
-from typing import Any, Dict, Iterator, List, Optional, Union
-import numpy as np
+from collections.abc import Iterator
+from typing import Any
+
 import jax.numpy as jnp
+import numpy as np
 
 from timestral.data.synthetic import generate_multivariate_with_covariates
 
@@ -33,13 +35,14 @@ class SyntheticDataset:
         self.known_cov_prob = known_cov_prob
         self.rng = np.random.default_rng(seed)
 
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         return self
 
-    def __next__(self) -> Dict[str, Any]:
+    def __next__(self) -> dict[str, Any]:
         return self.generate_batch()
 
-    def generate_batch(self) -> Dict[str, Any]:
+    def generate_batch(self) -> dict[str, Any]:
+        """Generate a single training batch of mixed synthetic multivariate series."""
         all_inputs = []
         all_obs = []
         all_groups = []
@@ -47,9 +50,13 @@ class SyntheticDataset:
         all_min_ctx = []
 
         for b_idx in range(self.batch_size):
-            num_targets = self.rng.integers(2, 4) if self.rng.random() < self.multivariate_prob else 1
-            num_past = self.rng.integers(1, 3) if self.rng.random() < self.past_cov_prob else 0
-            num_known = self.rng.integers(1, 3) if self.rng.random() < self.known_cov_prob else 0
+            num_targets = (
+                int(self.rng.integers(2, 4)) if self.rng.random() < self.multivariate_prob else 1
+            )
+            num_past = int(self.rng.integers(1, 3)) if self.rng.random() < self.past_cov_prob else 0
+            num_known = (
+                int(self.rng.integers(1, 3)) if self.rng.random() < self.known_cov_prob else 0
+            )
 
             vals, obs, roles, _ = generate_multivariate_with_covariates(
                 num_targets=num_targets,
@@ -90,7 +97,7 @@ class TimeSeriesDataset:
 
     def __init__(
         self,
-        data: Union[np.ndarray, List[np.ndarray]],
+        data: np.ndarray | list[np.ndarray],
         batch_size: int = 8,
         sequence_length: int = 256,
         patch_size: int = 8,
@@ -112,10 +119,10 @@ class TimeSeriesDataset:
         else:
             self.series_list = data
 
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         return self
 
-    def __next__(self) -> Dict[str, Any]:
+    def __next__(self) -> dict[str, Any]:
         all_inputs = []
         all_obs = []
         all_groups = []

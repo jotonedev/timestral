@@ -1,6 +1,5 @@
 """Loss functions and probabilistic evaluation metrics for Timestral training."""
 
-from typing import Tuple
 import jax
 import jax.numpy as jnp
 
@@ -8,9 +7,9 @@ import jax.numpy as jnp
 def pinball_loss(
     targets: jax.Array,
     predictions: jax.Array,
-    quantile_knots: Tuple[float, ...],
+    quantile_knots: tuple[float, ...],
 ) -> jax.Array:
-    """Multi-quantile pinball loss.
+    r"""Multi-quantile pinball loss.
 
     $$\\rho_\\tau(e) = \\max(\\tau e, (\\tau - 1) e), \\quad e = y - \\hat{q}_\\tau$$
 
@@ -33,7 +32,7 @@ def masked_pinball_loss(
     targets: jax.Array,
     predictions: jax.Array,
     mask: jax.Array,
-    quantile_knots: Tuple[float, ...],
+    quantile_knots: tuple[float, ...],
 ) -> jax.Array:
     """Mean pinball loss over observed target positions.
 
@@ -56,7 +55,7 @@ def wql_metric(
     targets: jax.Array,
     predictions: jax.Array,
     mask: jax.Array,
-    quantile_knots: Tuple[float, ...],
+    quantile_knots: tuple[float, ...],
 ) -> jax.Array:
     """Weighted Quantile Loss (WQL) / continuous ranked probability approximation.
 
@@ -73,7 +72,7 @@ def crps_metric(
     targets: jax.Array,
     predictions: jax.Array,
     mask: jax.Array,
-    quantile_knots: Tuple[float, ...],
+    quantile_knots: tuple[float, ...],
 ) -> jax.Array:
     """Continuous Ranked Probability Score (CRPS) approximated from quantile predictions."""
     return 2.0 * masked_pinball_loss(targets, predictions, mask, quantile_knots)
@@ -90,5 +89,3 @@ def mase_metric(
     naive_err = jnp.mean(jnp.abs(history[..., seasonality:] - history[..., :-seasonality]), axis=-1)
     scale = jnp.maximum(naive_err, 1e-6)
     return jnp.mean(abs_err / scale)
-
-

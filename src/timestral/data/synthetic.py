@@ -2,7 +2,6 @@
 
 import functools
 import math
-from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from sklearn.gaussian_process.kernels import (
@@ -15,8 +14,10 @@ from sklearn.gaussian_process.kernels import (
     WhiteKernel,
 )
 
+
 # Standard KernelSynth Bank (from Chronos / Ansari et al., 2024)
-def build_kernelsynth_bank(length: int = 1024) -> List[Kernel]:
+def build_kernelsynth_bank(length: int = 1024) -> list[Kernel]:
+    """Build standard KernelSynth GP kernel bank from Chronos."""
     return [
         ExpSineSquared(periodicity=24 / length),
         ExpSineSquared(periodicity=48 / length),
@@ -50,7 +51,7 @@ def build_kernelsynth_bank(length: int = 1024) -> List[Kernel]:
 def sample_kernelsynth_gp(
     length: int = 512,
     max_kernels: int = 4,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """Sample from Gaussian Process prior with composite random kernels (Chronos KernelSynth)."""
     if rng is None:
@@ -60,8 +61,9 @@ def sample_kernelsynth_gp(
     X = np.linspace(0, 1, length)[:, None]
 
     for _ in range(5):
-        num_k = rng.integers(1, max_kernels + 1)
-        selected = rng.choice(bank, size=num_k, replace=True)
+        num_k = int(rng.integers(1, max_kernels + 1))
+        indices = rng.choice(len(bank), size=num_k, replace=True)
+        selected = [bank[int(i)] for i in indices]
 
         def binary_compose(a: Kernel, b: Kernel) -> Kernel:
             return a + b if rng.random() < 0.5 else a * b
@@ -74,7 +76,7 @@ def sample_kernelsynth_gp(
             cov += 1e-5 * np.eye(length)
             ts = rng.multivariate_normal(mean=np.zeros(length), cov=cov, method="eigh")
             return ts
-        except Exception:
+        except (ValueError, np.linalg.LinAlgError):
             continue
 
     # Fallback to smooth RBF
@@ -84,7 +86,7 @@ def sample_kernelsynth_gp(
 
 def sample_timesfm_components(
     length: int = 512,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """Sample time series from TimesFM physical components (trends, harmonics, ARMA, random walk)."""
     if rng is None:
@@ -147,8 +149,8 @@ def generate_multivariate_with_covariates(
     num_past_cov: int = 0,
     num_known_cov: int = 0,
     length: int = 512,
-    rng: Optional[np.random.Generator] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     r"""Generate coupled multivariate targets along with past and known future covariates.
 
     Uses the Chronos-2 multivariate mixing matrix formulation:
@@ -215,31 +217,35 @@ def generate_multivariate_with_covariates(
         roles += [2] * num_known_cov
 
     values = np.concatenate(all_rows, axis=0).astype(np.float32)
-    obs_mask = np.ones_like(values, dtype=bool)
-
-    # Telemetry burst missingness augmentation
-    if rng.random() < 0.4:
-        burst_len = rng.integers(5, min(length // 4, 64))
-        burst_start = rng.integers(0, length - burst_len)
-        obs_mask[:, burst_start : burst_start + burst_len] = False
-
-    # Random point dropout
-    if rng.random() < 0.3:
-        drop = rng.random(values.shape) < 0.05
-        obs_mask = obs_mask & ~drop
+    obs_mask = _apply_missingness_augmentation(values, rng)
 
     role_ids = np.array(roles, dtype=np.int32)
     group_ids = np.zeros(total_rows, dtype=np.int32)
     return values, obs_mask, role_ids, group_ids
 
 
+def _apply_missingness_augmentation(values: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Apply burst and dropout missingness patterns."""
+    obs_mask = np.ones_like(values, dtype=bool)
+    length = values.shape[-1]
+    if rng.random() < 0.4:
+        burst_len = rng.integers(5, min(length // 4, 64))
+        burst_start = rng.integers(0, length - burst_len)
+        obs_mask[:, burst_start : burst_start + burst_len] = False
+
+    if rng.random() < 0.3:
+        drop = rng.random(values.shape) < 0.05
+        obs_mask = obs_mask & ~drop
+    return obs_mask
+
+
 def tsmixup(
     series1: np.ndarray,
     series2: np.ndarray,
     alpha: float = 0.5,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """TSMixup convex combination of two series: $\\tilde{y} = \\lambda y_1 + (1 - \\lambda) y_2$."""
+    r"""TSMixup convex combination of two series: $\tilde{y} = \lambda y_1 + (1 - \lambda) y_2$."""
     if rng is None:
         rng = np.random.default_rng()
     lam = rng.beta(alpha, alpha)

@@ -16,12 +16,15 @@ from timestral.config import LAYER_KIND_AXES
 
 
 class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization."""
+
     def __init__(self, dim: int, eps: float) -> None:
         super().__init__()
         self.eps = eps
         self.scale = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: Tensor) -> Tensor:
+        """Apply RMS normalization."""
         xf = x.float()
         out = (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)).type_as(x)
         return out * self.scale
@@ -38,6 +41,7 @@ class ResidualBlock(nn.Module):
         self.activation = nn.SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
+        """Apply residual projection block."""
         out = self.output_layer(self.activation(self.hidden_layer(x)))
         return out + self.residual_layer(x)
 
@@ -51,6 +55,7 @@ class FusedSwiGLU(nn.Module):
         self.w3 = nn.Linear(hidden_dim, embed_dim, bias=use_bias)
 
     def forward(self, x: Tensor) -> Tensor:
+        """Apply SwiGLU projection."""
         gate, up = self.w12(x).chunk(2, dim=-1)
         return self.w3(gate * F.silu(up))
 
@@ -67,7 +72,9 @@ class SinCosRoPE(nn.Module):
 
     def __init__(self, dim: int, base: float, rotary_dim: int) -> None:
         super().__init__()
-        assert 0 < rotary_dim <= dim and rotary_dim % 2 == 0, f"invalid rotary_dim={rotary_dim} for dim={dim}"
+        assert 0 < rotary_dim <= dim and rotary_dim % 2 == 0, (
+            f"invalid rotary_dim={rotary_dim} for dim={dim}"
+        )
         self.dim = dim
         self.base = base
         self.rotary_dim = rotary_dim
@@ -89,7 +96,9 @@ class SinCosRoPE(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
         """Return `(cos, sin)` tables, each `(R, N, head_dim)`, for integer `position_ids` `(R, N)`."""
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        inv_freq_expanded = (
+            self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        )
         position_ids_expanded = position_ids[:, None, :].float()
         device_type = x.device.type if x.device.type != "mps" else "cpu"
         with torch.autocast(device_type=device_type, enabled=False):
@@ -126,7 +135,9 @@ class TwoStreamMask:
     enc_len: int
 
 
-def _sdpa(query: Tensor, key: Tensor, value: Tensor, mask: Tensor | None, is_causal: bool = False) -> Tensor:
+def _sdpa(
+    query: Tensor, key: Tensor, value: Tensor, mask: Tensor | None, is_causal: bool = False
+) -> Tensor:
     """Scaled dot-product attention on `(batch, seq, heads, head_dim)`; returns `(batch, seq, heads * head_dim)`."""
     batch, seqlen, _, _ = query.shape
     out = F.scaled_dot_product_attention(
@@ -148,7 +159,9 @@ class Attention(nn.Module):
     the output projection.
     """
 
-    def __init__(self, embed_dim: int, num_heads: int, is_time: bool, use_bias: bool, gate: str) -> None:
+    def __init__(
+        self, embed_dim: int, num_heads: int, is_time: bool, use_bias: bool, gate: str
+    ) -> None:
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -156,7 +169,9 @@ class Attention(nn.Module):
         self.is_time = is_time
         self.wQKV = nn.Linear(embed_dim, 3 * embed_dim, bias=use_bias)
         self.wO = nn.Linear(embed_dim, embed_dim, bias=use_bias)
-        self._gate = nn.Linear(embed_dim, embed_dim, bias=use_bias) if gate == "sdpa_sigmoid" else None
+        self._gate = (
+            nn.Linear(embed_dim, embed_dim, bias=use_bias) if gate == "sdpa_sigmoid" else None
+        )
 
     def _qkv(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Split the fused projection. The weight layout is `(qkv, head_dim, n_heads)`."""
@@ -165,7 +180,10 @@ class Attention(nn.Module):
         q, k, v = qkv.permute(2, 0, 1, 4, 3).unbind(dim=0)
         return q.contiguous(), k.contiguous(), v.contiguous()
 
-    def forward(self, x: Tensor, mask: Tensor | TwoStreamMask | None, cos: Tensor, sin: Tensor) -> Tensor:
+    def forward(
+        self, x: Tensor, mask: Tensor | TwoStreamMask | None, cos: Tensor, sin: Tensor
+    ) -> Tensor:
+        """Compute multi-head attention."""
         rows, num_patches, _ = x.shape
         inputs = x if self.is_time else x.permute(1, 0, 2)  # time: (R, N, D); variate: (N, R, D)
         q, k, v = self._qkv(inputs)
@@ -208,7 +226,13 @@ class TransformerBlock(nn.Module):
         self.attn_norms = nn.ModuleList([RMSNorm(embed_dim, norm_eps) for _ in axes])
         self.attns = nn.ModuleList(
             [
-                Attention(embed_dim, num_heads, is_time, attn_bias, time_attn_gate if is_time else variate_attn_gate)
+                Attention(
+                    embed_dim,
+                    num_heads,
+                    is_time,
+                    attn_bias,
+                    time_attn_gate if is_time else variate_attn_gate,
+                )
                 for is_time in axes
             ]
         )
@@ -216,14 +240,22 @@ class TransformerBlock(nn.Module):
         self.mlp = FusedSwiGLU(embed_dim, mlp_hidden_dim, mlp_bias)
 
     def forward(
-        self, x: Tensor, time_mask: Tensor | TwoStreamMask | None, variate_mask: Tensor | None, cos: Tensor, sin: Tensor
+        self,
+        x: Tensor,
+        time_mask: Tensor | TwoStreamMask | None,
+        variate_mask: Tensor | None,
+        cos: Tensor,
+        sin: Tensor,
     ) -> Tensor:
+        """Execute transformer block forward pass."""
         for norm, attn in zip(self.attn_norms, self.attns):
             x = x + attn(norm(x), time_mask if attn.is_time else variate_mask, cos, sin)
         return x + self.mlp(self.mlp_norm(x))
 
 
 class Transformer(nn.Module):
+    """Stack of Transformer blocks with Rotary Position Embeddings and RMSNorm."""
+
     def __init__(
         self,
         block_schedule: tuple[str, ...],
@@ -259,10 +291,16 @@ class Transformer(nn.Module):
         self.out_norm = RMSNorm(embed_dim, norm_eps)
 
     def forward(
-        self, x: Tensor, time_mask: Tensor | TwoStreamMask | None, variate_mask: Tensor | None, positions: Tensor
+        self,
+        x: Tensor,
+        time_mask: Tensor | TwoStreamMask | None,
+        variate_mask: Tensor | None,
+        positions: Tensor,
     ) -> Tensor:
         """Run the stack on `x` `(R, N, D)` with integer time `positions` `(R, N)`."""
-        assert positions.shape == x.shape[:2], f"positions {tuple(positions.shape)} do not match x {tuple(x.shape)}"
+        assert positions.shape == x.shape[:2], (
+            f"positions {tuple(positions.shape)} do not match x {tuple(x.shape)}"
+        )
         cos, sin = self.rope(x, positions)
         for layer in self.layers:
             x = layer(x, time_mask, variate_mask, cos, sin)

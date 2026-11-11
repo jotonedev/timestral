@@ -1,6 +1,5 @@
 """The Timestral network and its training & inference primitives in Flax / JAX."""
 
-from typing import Optional, Tuple
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -28,16 +27,21 @@ ROLE_PAST_COV = 1
 ROLE_KNOWN_COV = 2
 
 
-def denormalize_quantiles(preds: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool) -> jax.Array:
+def denormalize_quantiles(
+    preds: jax.Array, loc: jax.Array, scale: jax.Array, use_asinh: bool
+) -> jax.Array:
     """Invert normalized quantiles `sinh(preds) * scale + loc`."""
     return invert_affine_asinh(preds, loc, scale, use_asinh)
 
 
 class PatchRepresentation(nn.Module):
+    """Project patched values and missing indicators into d_model embedding space."""
+
     patch_size: int
     d_model: int
 
     def setup(self):
+        """Initialize patch projection layers and learnable forecast query."""
         self.patch_proj = ResidualBlock(
             input_dims=2 * self.patch_size,
             hidden_dims=4 * self.d_model,
@@ -48,6 +52,7 @@ class PatchRepresentation(nn.Module):
         self.forecast_query = self.param("forecast_query", nn.initializers.zeros, (self.d_model,))
 
     def __call__(self, scaled: jax.Array, observed: jax.Array) -> jax.Array:
+        """Project scaled inputs and missingness masks into token embeddings."""
         r, t = scaled.shape
         n = t // self.patch_size
         values = scaled.reshape(r, n, self.patch_size)
@@ -56,11 +61,12 @@ class PatchRepresentation(nn.Module):
         return self.patch_proj(x)
 
     def forecast_tokens(self, rows: int, n_patches: int) -> jax.Array:
+        """Broadcast learnable forecast queries across rows and horizon patches."""
         query = self.forecast_query.reshape(1, 1, -1)
         return jnp.broadcast_to(query, (rows, n_patches, self.d_model))
 
 
-def monotone_quantiles(raw: jax.Array, levels: Tuple[float, ...], width_factor: float) -> jax.Array:
+def monotone_quantiles(raw: jax.Array, levels: tuple[float, ...], width_factor: float) -> jax.Array:
     """Non-crossing quantiles from raw head outputs along the last axis (`monotone_cumsum`)."""
     m = levels.index(0.5)
     widths = [0.0] * len(levels)
@@ -80,9 +86,12 @@ def monotone_quantiles(raw: jax.Array, levels: Tuple[float, ...], width_factor: 
 
 
 class QuantileHead(nn.Module):
+    """Project transformer token embeddings to monotone quantiles per patch."""
+
     config: TimestralConfig
 
     def setup(self):
+        """Initialize output quantile projection layer."""
         c = self.config
         self.projection = ResidualBlock(
             input_dims=c.d_model,
@@ -93,18 +102,26 @@ class QuantileHead(nn.Module):
         )
 
     def __call__(self, x: jax.Array) -> jax.Array:
+        """Project token embeddings to non-crossing quantile forecasts."""
         raw = self.projection(x)
         *leading, n_patches, _ = raw.shape
         preds = raw.reshape(*leading, n_patches, self.config.patch_size, self.config.num_quantiles)
         preds = preds.astype(jnp.promote_types(preds.dtype, jnp.float32))
-        preds = monotone_quantiles(preds, self.config.quantile_knots, self.config.quantile_width_factor)
-        return preds.reshape(*leading, n_patches * self.config.patch_size, self.config.num_quantiles)
+        preds = monotone_quantiles(
+            preds, self.config.quantile_knots, self.config.quantile_width_factor
+        )
+        return preds.reshape(
+            *leading, n_patches * self.config.patch_size, self.config.num_quantiles
+        )
 
 
 class TimestralModel(nn.Module):
+    """Timestral transformer model with two-stream attention and quantile heads in Flax."""
+
     config: TimestralConfig
 
     def setup(self):
+        """Initialize representation, transformer backbone, and quantile head."""
         c = self.config
         self.representation = PatchRepresentation(
             patch_size=c.patch_size,
@@ -127,7 +144,9 @@ class TimestralModel(nn.Module):
         )
         self.head = QuantileHead(config=c, name="head")
 
-    def scale(self, inputs: jax.Array, observed: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    def scale(
+        self, inputs: jax.Array, observed: jax.Array
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Causal per-patch normalization of packed `(R, T)` rows."""
         c = self.config
         inp_exp = jnp.expand_dims(inputs, 1)
@@ -147,13 +166,17 @@ class TimestralModel(nn.Module):
         loc: jax.Array,
         scale: jax.Array,
         known_rows: jax.Array,
-    ) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Normalize known-future covariate rows with whole-row statistics."""
         has_known = jnp.any(known_rows)
 
         def apply_known():
-            loc_c, scale_c, is_binary = instance_norm_stats(inputs, observed, minimum_scale=self.config.minimum_scale)
-            known_scaled = apply_affine_asinh_masked(inputs, loc_c, scale_c, observed, use_asinh=False)
+            loc_c, scale_c, is_binary = instance_norm_stats(
+                inputs, observed, minimum_scale=self.config.minimum_scale
+            )
+            known_scaled = apply_affine_asinh_masked(
+                inputs, loc_c, scale_c, observed, use_asinh=False
+            )
             if self.config.use_asinh:
                 work = jnp.promote_types(known_scaled.dtype, jnp.float32)
                 squashed = jnp.arcsinh(known_scaled.astype(work)).astype(known_scaled.dtype)
@@ -172,7 +195,7 @@ class TimestralModel(nn.Module):
         x_enc: jax.Array,
         x_dec: jax.Array,
         time_mask: jax.Array,
-        variate_mask: Optional[jax.Array],
+        variate_mask: jax.Array | None,
         positions: jax.Array,
     ) -> jax.Array:
         """Transformer over `[Enc ; Dec]`, then the head on decoder tokens (normalized space)."""
@@ -189,9 +212,9 @@ class TimestralModel(nn.Module):
         observed: jax.Array,
         group_ids: jax.Array,
         horizon_patches: int,
-        role_ids: Optional[jax.Array] = None,
-        known_future: Optional[jax.Array] = None,
-        known_future_mask: Optional[jax.Array] = None,
+        role_ids: jax.Array | None = None,
+        known_future: jax.Array | None = None,
+        known_future_mask: jax.Array | None = None,
     ) -> jax.Array:
         """Forecast one block of `horizon_patches` patches after a packed context."""
         assert inputs.ndim == 2, f"expected packed (R, T) inputs, got {inputs.shape}"
@@ -208,7 +231,9 @@ class TimestralModel(nn.Module):
 
         full_inputs = jnp.concatenate([inputs, known_future], axis=-1)
         full_observed = jnp.concatenate([observed, known_future_mask], axis=-1)
-        return self._predict_window(full_inputs, full_observed, group_ids, horizon_patches, role_ids)
+        return self._predict_window(
+            full_inputs, full_observed, group_ids, horizon_patches, role_ids
+        )
 
     def _predict_context_only(
         self,
@@ -236,7 +261,9 @@ class TimestralModel(nn.Module):
         preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions)
         anchor_loc = loc.reshape(rows, ll, ps)[..., 0][:, ll - 1 : ll]
         anchor_scale = scale.reshape(rows, ll, ps)[..., 0][:, ll - 1 : ll]
-        return denormalize_quantiles(preds, jnp.expand_dims(anchor_loc, -1), jnp.expand_dims(anchor_scale, -1), c.use_asinh)
+        return denormalize_quantiles(
+            preds, jnp.expand_dims(anchor_loc, -1), jnp.expand_dims(anchor_scale, -1), c.use_asinh
+        )
 
     def _predict_window(
         self,
@@ -256,25 +283,36 @@ class TimestralModel(nn.Module):
         known_rows = role_ids == ROLE_KNOWN_COV
 
         scaled, loc, scale = self.scale(full_inputs, full_observed)
-        scaled, loc, scale = self._known_cov_scaling(full_inputs, full_observed, scaled, loc, scale, known_rows)
+        scaled, loc, scale = self._known_cov_scaling(
+            full_inputs, full_observed, scaled, loc, scale, known_rows
+        )
         x_enc = self.representation(scaled, full_observed)
         x_dec = self.representation.forecast_tokens(rows, n)
 
         obs_per_patch = full_observed.reshape(rows, n, ps).any(axis=-1)
         key_valid = compute_enc_key_validity(obs_per_patch, c.attend_missing_patches)
         s_rows = jnp.full((rows,), ll, dtype=jnp.int32)
-        time_mask = build_two_stream_time_mask(s_rows, n, c.block_size, key_valid, bidirectional_rows=known_rows)
+        time_mask = build_two_stream_time_mask(
+            s_rows, n, c.block_size, key_valid, bidirectional_rows=known_rows
+        )
         variate_mask = build_two_stream_variate_mask(
             group_ids, key_valid, n, target_rows=target_rows, bidirectional_rows=known_rows
         )
         first_obs = row_group_first_observed_patch(obs_per_patch, group_ids)
         positions = build_two_stream_positions(n, first_obs)
 
-        preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions).reshape(rows, n, ps, -1)
+        preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions).reshape(
+            rows, n, ps, -1
+        )
         horizon_preds = preds[:, ll:n].reshape(rows, h * ps, preds.shape[-1])
         anchor_loc = loc.reshape(rows, n, ps)[..., 0][:, ll - 1 : ll]
         anchor_scale = scale.reshape(rows, n, ps)[..., 0][:, ll - 1 : ll]
-        return denormalize_quantiles(horizon_preds, jnp.expand_dims(anchor_loc, -1), jnp.expand_dims(anchor_scale, -1), c.use_asinh)
+        return denormalize_quantiles(
+            horizon_preds,
+            jnp.expand_dims(anchor_loc, -1),
+            jnp.expand_dims(anchor_scale, -1),
+            c.use_asinh,
+        )
 
     def training_forward(
         self,
@@ -282,8 +320,8 @@ class TimestralModel(nn.Module):
         full_observed: jax.Array,
         group_ids: jax.Array,
         min_context: jax.Array,
-        role_ids: Optional[jax.Array] = None,
-    ) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        role_ids: jax.Array | None = None,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Full two-stream DHF forward pass for training across tiled forecast blocks.
 
         Args:
@@ -309,13 +347,17 @@ class TimestralModel(nn.Module):
         known_rows = role_ids == ROLE_KNOWN_COV
 
         scaled, loc, scale = self.scale(full_inputs, full_observed)
-        scaled, loc, scale = self._known_cov_scaling(full_inputs, full_observed, scaled, loc, scale, known_rows)
+        scaled, loc, scale = self._known_cov_scaling(
+            full_inputs, full_observed, scaled, loc, scale, known_rows
+        )
         x_enc = self.representation(scaled, full_observed)
         x_dec = self.representation.forecast_tokens(rows, n)
 
         obs_per_patch = full_observed.reshape(rows, n, ps).any(axis=-1)
         key_valid = compute_enc_key_validity(obs_per_patch, c.attend_missing_patches)
-        time_mask = build_two_stream_time_mask(min_context, n, c.block_size, key_valid, bidirectional_rows=known_rows)
+        time_mask = build_two_stream_time_mask(
+            min_context, n, c.block_size, key_valid, bidirectional_rows=known_rows
+        )
         variate_mask = build_two_stream_variate_mask(
             group_ids, key_valid, n, target_rows=target_rows, bidirectional_rows=known_rows
         )

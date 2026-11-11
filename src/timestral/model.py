@@ -51,6 +51,7 @@ class PatchRepresentation(nn.Module):
         return self.patch_proj(x)
 
     def forecast_tokens(self, rows: int, n_patches: int) -> Tensor:
+        """Broadcast learnable forecast queries across rows and horizon patches."""
         return self.forecast_query.view(1, 1, -1).expand(rows, n_patches, -1)
 
 
@@ -85,7 +86,10 @@ class QuantileHead(nn.Module):
         self.patch_size = config.patch_size
         self.num_quantiles = config.num_quantiles
         self.projection = ResidualBlock(
-            config.d_model, 4 * config.d_model, config.patch_size * config.num_quantiles, use_bias=False
+            config.d_model,
+            4 * config.d_model,
+            config.patch_size * config.num_quantiles,
+            use_bias=False,
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -94,11 +98,15 @@ class QuantileHead(nn.Module):
         *leading, n_patches, _ = raw.shape
         preds = raw.reshape(*leading, n_patches, self.patch_size, self.num_quantiles)
         preds = preds.to(torch.promote_types(preds.dtype, torch.float32))
-        preds = monotone_quantiles(preds, self.config.quantile_knots, self.config.quantile_width_factor)
+        preds = monotone_quantiles(
+            preds, self.config.quantile_knots, self.config.quantile_width_factor
+        )
         return preds.reshape(*leading, n_patches * self.patch_size, self.num_quantiles)
 
 
 class TimestralModel(nn.Module):
+    """Timestral foundation forecasting network in PyTorch."""
+
     def __init__(self, config: TimestralConfig) -> None:
         super().__init__()
         self.config = config
@@ -126,14 +134,24 @@ class TimestralModel(nn.Module):
         """
         c = self.config
         loc, scale = causal_patch_loc_scale(
-            inputs.unsqueeze(1), observed.unsqueeze(1), c.patch_size, c.minimum_scale, c.stabilize_with_global
+            inputs.unsqueeze(1),
+            observed.unsqueeze(1),
+            c.patch_size,
+            c.minimum_scale,
+            c.stabilize_with_global,
         )
         loc, scale = loc.squeeze(1), scale.squeeze(1)
         scaled = apply_affine_asinh_masked(inputs, loc, scale, observed, use_asinh=c.use_asinh)
         return scaled, loc, scale
 
     def _known_cov_scaling(
-        self, inputs: Tensor, observed: Tensor, scaled: Tensor, loc: Tensor, scale: Tensor, known_rows: Tensor
+        self,
+        inputs: Tensor,
+        observed: Tensor,
+        scaled: Tensor,
+        loc: Tensor,
+        scale: Tensor,
+        known_rows: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Normalize known-future covariate rows with non-causal whole-row statistics.
 
@@ -141,17 +159,28 @@ class TimestralModel(nn.Module):
         """
         if not bool(known_rows.any()):
             return scaled, loc, scale
-        loc_c, scale_c, is_binary = instance_norm_stats(inputs, observed, minimum_scale=self.config.minimum_scale)
+        loc_c, scale_c, is_binary = instance_norm_stats(
+            inputs, observed, minimum_scale=self.config.minimum_scale
+        )
         known_scaled = apply_affine_asinh_masked(inputs, loc_c, scale_c, observed, use_asinh=False)
         if self.config.use_asinh:
             work = torch.promote_types(known_scaled.dtype, torch.float32)
             squashed = known_scaled.to(work).asinh().to(known_scaled.dtype)
             known_scaled = torch.where(observed & ~is_binary, squashed, known_scaled)
         sel = known_rows[:, None]
-        return torch.where(sel, known_scaled, scaled), torch.where(sel, loc_c, loc), torch.where(sel, scale_c, scale)
+        return (
+            torch.where(sel, known_scaled, scaled),
+            torch.where(sel, loc_c, loc),
+            torch.where(sel, scale_c, scale),
+        )
 
     def _run_two_stream(
-        self, x_enc: Tensor, x_dec: Tensor, time_mask: Tensor, variate_mask: Tensor | None, positions: Tensor
+        self,
+        x_enc: Tensor,
+        x_dec: Tensor,
+        time_mask: Tensor,
+        variate_mask: Tensor | None,
+        positions: Tensor,
     ) -> Tensor:
         """Transformer over `[Enc ; Dec]`, then the head on the decoder tokens (normalized space)."""
         x = torch.cat([x_enc, x_dec], dim=1)
@@ -188,7 +217,11 @@ class TimestralModel(nn.Module):
             Raw-space quantiles `(R, horizon_patches * patch_size, Q)`, non-decreasing along Q.
         """
         assert inputs.dim() == 2, f"expected packed (R, T) inputs, got {tuple(inputs.shape)}"
-        if role_ids is None or not self.config.covariate_enabled or bool((role_ids == ROLE_TARGET).all()):
+        if (
+            role_ids is None
+            or not self.config.covariate_enabled
+            or bool((role_ids == ROLE_TARGET).all())
+        ):
             return self._predict_context_only(inputs, observed, group_ids, horizon_patches)
         r = inputs.shape[0]
         horizon_len = horizon_patches * self.config.patch_size
@@ -196,18 +229,26 @@ class TimestralModel(nn.Module):
             known_future = torch.zeros(r, horizon_len, device=inputs.device, dtype=inputs.dtype)
             known_future_mask = torch.zeros(r, horizon_len, device=inputs.device, dtype=torch.bool)
         assert known_future_mask is not None, "known_future_mask is required alongside known_future"
-        assert known_future.shape == (r, horizon_len), f"known_future must be ({r}, {horizon_len}), got {tuple(known_future.shape)}"
+        assert known_future.shape == (r, horizon_len), (
+            f"known_future must be ({r}, {horizon_len}), got {tuple(known_future.shape)}"
+        )
         full_inputs = torch.cat([inputs, known_future], dim=-1)
         full_observed = torch.cat([observed, known_future_mask], dim=-1)
-        return self._predict_window(full_inputs, full_observed, group_ids, horizon_patches, role_ids)
+        return self._predict_window(
+            full_inputs, full_observed, group_ids, horizon_patches, role_ids
+        )
 
-    def _predict_context_only(self, inputs: Tensor, observed: Tensor, group_ids: Tensor, horizon_patches: int) -> Tensor:
+    def _predict_context_only(
+        self, inputs: Tensor, observed: Tensor, group_ids: Tensor, horizon_patches: int
+    ) -> Tensor:
         """No covariates: encoder over the context, `h` forecast-query tokens after it."""
         c = self.config
         ps = c.patch_size
         rows, t = inputs.shape
         assert t % ps == 0, f"context length {t} must be a multiple of patch_size {ps}"
-        assert group_ids.shape == (rows,), f"group_ids must be ({rows},), got {tuple(group_ids.shape)}"
+        assert group_ids.shape == (rows,), (
+            f"group_ids must be ({rows},), got {tuple(group_ids.shape)}"
+        )
         ll, h = t // ps, horizon_patches
         assert h >= 1, f"horizon_patches must be >= 1, got {h}"
 
@@ -226,10 +267,17 @@ class TimestralModel(nn.Module):
         preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions)
         anchor_loc = loc.unflatten(-1, (ll, ps))[..., 0][:, ll - 1 : ll]
         anchor_scale = scale.unflatten(-1, (ll, ps))[..., 0][:, ll - 1 : ll]
-        return denormalize_quantiles(preds, anchor_loc.unsqueeze(-1), anchor_scale.unsqueeze(-1), c.use_asinh)
+        return denormalize_quantiles(
+            preds, anchor_loc.unsqueeze(-1), anchor_scale.unsqueeze(-1), c.use_asinh
+        )
 
     def _predict_window(
-        self, full_inputs: Tensor, full_observed: Tensor, group_ids: Tensor, horizon_patches: int, role_ids: Tensor
+        self,
+        full_inputs: Tensor,
+        full_observed: Tensor,
+        group_ids: Tensor,
+        horizon_patches: int,
+        role_ids: Tensor,
     ) -> Tensor:
         """With covariates: encoder over context plus horizon, so known-future values are keys.
 
@@ -241,9 +289,13 @@ class TimestralModel(nn.Module):
         ps = c.patch_size
         rows, w = full_inputs.shape
         assert w % ps == 0, f"window length {w} must be a multiple of patch_size {ps}"
-        assert group_ids.shape == (rows,) and role_ids.shape == (rows,), "group_ids and role_ids must be (R,)"
+        assert group_ids.shape == (rows,) and role_ids.shape == (rows,), (
+            "group_ids and role_ids must be (R,)"
+        )
         h = horizon_patches
-        assert 1 <= h <= c.block_size, f"decode block {h} must be in [1, {c.block_size}] with covariates"
+        assert 1 <= h <= c.block_size, (
+            f"decode block {h} must be in [1, {c.block_size}] with covariates"
+        )
         n = w // ps
         ll = n - h
         assert ll >= 1, f"context must have at least one patch (window {n}, horizon {h})"
@@ -251,14 +303,18 @@ class TimestralModel(nn.Module):
         known_rows = role_ids == ROLE_KNOWN_COV
 
         scaled, loc, scale = self.scale(full_inputs, full_observed)
-        scaled, loc, scale = self._known_cov_scaling(full_inputs, full_observed, scaled, loc, scale, known_rows)
+        scaled, loc, scale = self._known_cov_scaling(
+            full_inputs, full_observed, scaled, loc, scale, known_rows
+        )
         x_enc = self.representation(scaled, full_observed)
         x_dec = self.representation.forecast_tokens(rows, n)
 
         obs_per_patch = full_observed.unflatten(-1, (n, ps)).any(dim=-1)
         key_valid = compute_enc_key_validity(obs_per_patch, c.attend_missing_patches)
         s_rows = torch.full((rows,), ll, device=full_inputs.device, dtype=torch.long)
-        time_mask = build_two_stream_time_mask(s_rows, n, c.block_size, key_valid, bidirectional_rows=known_rows)
+        time_mask = build_two_stream_time_mask(
+            s_rows, n, c.block_size, key_valid, bidirectional_rows=known_rows
+        )
         variate_mask = build_two_stream_variate_mask(
             group_ids, key_valid, n, target_rows=target_rows, bidirectional_rows=known_rows
         )
@@ -266,8 +322,12 @@ class TimestralModel(nn.Module):
         first_obs = group_first_observed_patch(obs_per_patch, inverse, unique_ids.numel())[inverse]
         positions = build_two_stream_positions(n, first_obs)
 
-        preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions).unflatten(1, (n, ps))
+        preds = self._run_two_stream(x_enc, x_dec, time_mask, variate_mask, positions).unflatten(
+            1, (n, ps)
+        )
         horizon_preds = preds[:, ll:n].reshape(rows, h * ps, preds.shape[-1])
         anchor_loc = loc.unflatten(-1, (n, ps))[..., 0][:, ll - 1 : ll]
         anchor_scale = scale.unflatten(-1, (n, ps))[..., 0][:, ll - 1 : ll]
-        return denormalize_quantiles(horizon_preds, anchor_loc.unsqueeze(-1), anchor_scale.unsqueeze(-1), c.use_asinh)
+        return denormalize_quantiles(
+            horizon_preds, anchor_loc.unsqueeze(-1), anchor_scale.unsqueeze(-1), c.use_asinh
+        )

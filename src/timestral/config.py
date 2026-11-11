@@ -6,6 +6,7 @@ Forecasting (DHF), with monotone quantiles, decoded in the advancing refine
 frame.
 """
 
+import itertools
 import json
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -63,22 +64,31 @@ class TimestralConfig:
     quantile_width_factor: float = 2.0
 
     def __post_init__(self) -> None:
-        assert self.d_model % self.num_heads == 0, f"d_model={self.d_model} not divisible by num_heads={self.num_heads}"
+        assert self.d_model % self.num_heads == 0, (
+            f"d_model={self.d_model} not divisible by num_heads={self.num_heads}"
+        )
         assert self.rope_dim > 0 and self.rope_dim % 2 == 0, (
             f"rope_partial_factor={self.rope_partial_factor} gives an invalid rope_dim={self.rope_dim}"
         )
         for kind in self.block_schedule:
-            assert kind in LAYER_KINDS, f"unknown layer kind {kind!r}; expected one of {LAYER_KINDS}"
+            assert kind in LAYER_KINDS, (
+                f"unknown layer kind {kind!r}; expected one of {LAYER_KINDS}"
+            )
         for gate in (self.time_attn_gate, self.variate_attn_gate):
-            assert gate in ATTENTION_GATES, f"unknown attention gate {gate!r}; expected one of {ATTENTION_GATES}"
+            assert gate in ATTENTION_GATES, (
+                f"unknown attention gate {gate!r}; expected one of {ATTENTION_GATES}"
+            )
         knots = self.quantile_knots
         assert 0.5 in knots, f"quantile_knots must contain 0.5, got {knots}"
-        assert all(a < b for a, b in zip(knots, knots[1:])), f"quantile_knots must be increasing, got {knots}"
+        assert all(a < b for a, b in itertools.pairwise(knots)), (
+            f"quantile_knots must be increasing, got {knots}"
+        )
         if self.stabilize_with_global:
             raise ValueError("the advancing refine frame needs stabilize_with_global=False")
 
     @property
     def head_dim(self) -> int:
+        """Dimension per attention head."""
         return self.d_model // self.num_heads
 
     @property
@@ -88,10 +98,12 @@ class TimestralConfig:
 
     @property
     def num_quantiles(self) -> int:
+        """Total number of quantile knots."""
         return len(self.quantile_knots)
 
     @property
     def median_index(self) -> int:
+        """Index of the 0.5 (median) quantile level."""
         return self.quantile_knots.index(0.5)
 
     @property
@@ -111,6 +123,7 @@ class TimestralConfig:
         return False
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert configuration to dictionary."""
         d = asdict(self)
         d["block_schedule"] = list(self.block_schedule)
         d["quantile_knots"] = list(self.quantile_knots)
@@ -118,6 +131,7 @@ class TimestralConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TimestralConfig":
+        """Construct configuration from dictionary."""
         known = {f.name for f in fields(cls)}
         unknown = set(d) - known
         if unknown:
@@ -128,8 +142,10 @@ class TimestralConfig:
         return cls(**d)
 
     def save(self, path: str | Path) -> None:
+        """Serialize configuration to a JSON file."""
         Path(path).write_text(json.dumps(self.to_dict(), indent=2) + "\n")
 
     @classmethod
     def load(cls, path: str | Path) -> "TimestralConfig":
+        """Load configuration from a JSON file."""
         return cls.from_dict(json.loads(Path(path).read_text()))

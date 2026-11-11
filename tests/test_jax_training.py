@@ -1,31 +1,29 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from flax.training.train_state import TrainState
 
 from timestral import TimestralConfig
+from timestral.data.dataset import SyntheticDataset
 from timestral.jax.model import TimestralModel
 from timestral.training.losses import (
-    pinball_loss,
-    masked_pinball_loss,
     crps_metric,
+    masked_pinball_loss,
+    pinball_loss,
     wql_metric,
-    mase_metric,
 )
 from timestral.training.train_step import (
-    compute_dhf_loss,
     create_train_step,
-    create_eval_step,
 )
-from timestral.training.trainer import create_optimizer, TrainingConfig, Trainer
-from timestral.data.dataset import SyntheticDataset
+from timestral.training.trainer import Trainer, TrainingConfig, create_optimizer
 
 
 def test_pinball_loss_exact_values():
     knots = (0.1, 0.5, 0.9)
     targets = jnp.array([1.0, 2.0])
-    preds = jnp.array([[0.5, 1.0, 1.5], [2.5, 2.0, 1.5]])  # diff = [0.5, 0.0, -0.5], [-0.5, 0.0, 0.5]
+    preds = jnp.array(
+        [[0.5, 1.0, 1.5], [2.5, 2.0, 1.5]]
+    )  # diff = [0.5, 0.0, -0.5], [-0.5, 0.0, 0.5]
     loss = pinball_loss(targets, preds, knots)
     # For target=1.0, pred=0.5 -> diff=0.5 > 0 -> tau * 0.5 = 0.1 * 0.5 = 0.05
     assert jnp.isclose(loss[0, 0], 0.05)
@@ -111,7 +109,9 @@ def test_training_step_loss_decreases():
             initial_loss = loss
         final_loss = loss
 
-    assert final_loss < initial_loss * 0.85, f"Loss did not decrease: initial={initial_loss}, final={final_loss}"
+    assert final_loss < initial_loss * 0.85, (
+        f"Loss did not decrease: initial={initial_loss}, final={final_loss}"
+    )
     assert np.isfinite(final_loss)
 
 

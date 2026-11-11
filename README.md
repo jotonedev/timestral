@@ -64,15 +64,17 @@ The weights are on the Hugging Face Hub, in the Mistral AI organization:
 import numpy as np
 from timestral import TimestralForecaster
 
-forecaster = TimestralForecaster.from_pretrained("mistralai/Timestral-209M")  # device="cuda" for a GPU
+forecaster = TimestralForecaster.from_pretrained(
+    "mistralai/Timestral-209M"
+)  # device="cuda" for a GPU
 
-context = np.random.randn(2, 1, 2000).cumsum(-1)        # (series, variates, time); NaN = missing
+context = np.random.randn(2, 1, 2000).cumsum(-1)  # (series, variates, time); NaN = missing
 forecast = forecaster.forecast(context, prediction_length=96)
 
-forecast.quantiles.shape   # (2, 1, 96, 21): series, variates, horizon, quantile levels
-forecast.quantile_levels   # (0.01, 0.05, 0.1, ..., 0.9, 0.95, 0.99)
-forecast.median            # (2, 1, 96)
-forecast.quantile(0.9)     # (2, 1, 96)
+forecast.quantiles.shape  # (2, 1, 96, 21): series, variates, horizon, quantile levels
+forecast.quantile_levels  # (0.01, 0.05, 0.1, ..., 0.9, 0.95, 0.99)
+forecast.median  # (2, 1, 96)
+forecast.quantile(0.9)  # (2, 1, 96)
 ```
 
 - `context` can be `(B, V, T)`, `(B, T)` (one variate per series) or `(T,)` (one series),
@@ -94,10 +96,10 @@ forecast.quantile(0.9)     # (2, 1, 96)
 
 ```python
 forecast = forecaster.forecast(
-    context,                          # (B, V, T)
+    context,  # (B, V, T)
     prediction_length=96,
-    past_covariates=past,             # (B, C_past, T): known over the context only
-    known_covariates=known,           # (B, C_known, T + 96): known over context and horizon
+    past_covariates=past,  # (B, C_past, T): known over the context only
+    known_covariates=known,  # (B, C_known, T + 96): known over context and horizon
 )
 ```
 
@@ -111,8 +113,8 @@ NaN marks a missing covariate value.
 forecast = forecaster.forecast(
     context,
     prediction_length=96,
-    categorical_past_covariates=codes_past,     # (B, C, T) numeric category codes, NaN = missing
-    categorical_known_covariates=codes_known,   # (B, C, T + 96)
+    categorical_past_covariates=codes_past,  # (B, C, T) numeric category codes, NaN = missing
+    categorical_known_covariates=codes_known,  # (B, C, T + 96)
 )
 ```
 

@@ -30,16 +30,24 @@ def tiny_forecaster(block_size: int = 4, max_context: int = 256) -> TimestralFor
     return TimestralForecaster(model.eval())
 
 
-def series(batch: int, variates: int, length: int, seed: int = 0, positive: bool = False) -> torch.Tensor:
+def series(
+    batch: int, variates: int, length: int, seed: int = 0, positive: bool = False
+) -> torch.Tensor:
     g = torch.Generator().manual_seed(seed)
     t = torch.arange(length, dtype=torch.float32)
-    x = 10 * torch.sin(2 * math.pi * t / 24) + torch.randn(batch, variates, length, generator=g).cumsum(-1)
+    x = 10 * torch.sin(2 * math.pi * t / 24) + torch.randn(
+        batch, variates, length, generator=g
+    ).cumsum(-1)
     return x.abs() + 1 if positive else x
 
 
 @pytest.mark.parametrize(
     ("variates", "length", "horizon"),
-    [(1, 100, 12), (3, 300, 50), (2, 37, 70)],  # one block; context past the cap; three blocks after a short context
+    [
+        (1, 100, 12),
+        (3, 300, 50),
+        (2, 37, 70),
+    ],  # one block; context past the cap; three blocks after a short context
 )
 def test_forecast_shapes_and_finite(variates: int, length: int, horizon: int) -> None:
     fc = tiny_forecaster()
@@ -58,8 +66,12 @@ def test_symmetric_averaging_is_odd_with_covariates() -> None:
     x = series(2, 1, 120, seed=3)
     past = series(2, 2, 120, seed=1)
     known = series(2, 1, 120 + 24, seed=2)
-    pos = fc.forecast(x, 24, past_covariates=past, known_covariates=known, clip_nonnegative=False).quantiles
-    neg = fc.forecast(-x, 24, past_covariates=-past, known_covariates=-known, clip_nonnegative=False).quantiles
+    pos = fc.forecast(
+        x, 24, past_covariates=past, known_covariates=known, clip_nonnegative=False
+    ).quantiles
+    neg = fc.forecast(
+        -x, 24, past_covariates=-past, known_covariates=-known, clip_nonnegative=False
+    ).quantiles
     torch.testing.assert_close(neg, -pos.flip(-1), rtol=0, atol=0)
 
 
@@ -69,12 +81,26 @@ def test_categorical_covariates_are_target_encoded() -> None:
     g = torch.Generator().manual_seed(7)
     cat_known = torch.randint(0, 4, (2, 1, 120 + 24), generator=g).float()
     cat_known[0, 0, 10:20] = float("nan")
-    out = fc.forecast(x, 24, categorical_known_covariates=cat_known, symmetric_averaging=False).quantiles
+    out = fc.forecast(
+        x, 24, categorical_known_covariates=cat_known, symmetric_averaging=False
+    ).quantiles
     encoded = torch.stack(
-        [torch.from_numpy(np.concatenate(target_encode(x[i, 0].numpy(), cat_known[i, 0, :120].numpy(), cat_known[i, 0, 120:].numpy())))
-         for i in range(2)]
+        [
+            torch.from_numpy(
+                np.concatenate(
+                    target_encode(
+                        x[i, 0].numpy(),
+                        cat_known[i, 0, :120].numpy(),
+                        cat_known[i, 0, 120:].numpy(),
+                    )
+                )
+            )
+            for i in range(2)
+        ]
     )[:, None]
-    torch.testing.assert_close(out, fc.forecast(x, 24, known_covariates=encoded, symmetric_averaging=False).quantiles)
+    torch.testing.assert_close(
+        out, fc.forecast(x, 24, known_covariates=encoded, symmetric_averaging=False).quantiles
+    )
 
 
 def test_from_pretrained_local_directory_and_hub_repo(tmp_path, monkeypatch) -> None:
@@ -93,10 +119,25 @@ def test_from_pretrained_local_directory_and_hub_repo(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(timestral.loading, "snapshot_download", fake_snapshot_download)
     local = TimestralForecaster.from_pretrained(tmp_path)
     assert not calls  # an existing directory never touches the Hub
-    torch.testing.assert_close(local.forecast(x, prediction_length=12).quantiles, expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        local.forecast(x, prediction_length=12).quantiles, expected, rtol=0, atol=0
+    )
 
-    hub = TimestralForecaster.from_pretrained("org/timestral-tiny", revision="v1", token=False, local_files_only=True)
-    assert calls == [("org/timestral-tiny", {"revision": "v1", "cache_dir": None, "token": False,
-                                             "local_files_only": True,
-                                             "allow_patterns": ["config.json", "model.safetensors"]})]
-    torch.testing.assert_close(hub.forecast(x, prediction_length=12).quantiles, expected, rtol=0, atol=0)
+    hub = TimestralForecaster.from_pretrained(
+        "org/timestral-tiny", revision="v1", token=False, local_files_only=True
+    )
+    assert calls == [
+        (
+            "org/timestral-tiny",
+            {
+                "revision": "v1",
+                "cache_dir": None,
+                "token": False,
+                "local_files_only": True,
+                "allow_patterns": ["config.json", "model.safetensors"],
+            },
+        )
+    ]
+    torch.testing.assert_close(
+        hub.forecast(x, prediction_length=12).quantiles, expected, rtol=0, atol=0
+    )

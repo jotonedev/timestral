@@ -1,19 +1,18 @@
 """Trainer for Timestral time series foundation models using JAX, Flax, and Optax."""
 
-from dataclasses import dataclass, field
 import logging
-import os
-from pathlib import Path
 import time
-from typing import Any, Callable, Dict, Iterator, Optional
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from flax.training.train_state import TrainState
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from flax.training.train_state import TrainState
 
-from timestral.config import TimestralConfig
 from timestral.jax.conversion import save_flax_model_to_safetensors
 from timestral.jax.model import TimestralModel
 from timestral.training.train_step import create_eval_step, create_train_step
@@ -24,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrainingConfig:
     """Hyperparameters and configuration for Timestral training."""
+
     learning_rate: float = 3e-4
     min_learning_rate: float = 1e-6
     weight_decay: float = 1e-2
@@ -69,7 +69,7 @@ class Trainer:
         self,
         model: TimestralModel,
         config: TrainingConfig,
-        init_params: Optional[Dict[str, Any]] = None,
+        init_params: dict[str, Any] | None = None,
         rng_seed: int = 42,
     ) -> None:
         self.model = model
@@ -105,10 +105,10 @@ class Trainer:
 
     def train(
         self,
-        train_iter: Iterator[Dict[str, Any]],
-        eval_iter: Optional[Iterator[Dict[str, Any]]] = None,
+        train_iter: Iterator[dict[str, Any]],
+        eval_iter: Iterator[dict[str, Any]] | None = None,
         num_eval_batches: int = 10,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Execute the training loop across `total_steps`."""
         logger.info(f"Starting training for {self.config.total_steps} steps...")
         start_time = time.time()
@@ -158,5 +158,7 @@ class Trainer:
         p = Path(path)
         p.mkdir(parents=True, exist_ok=True)
         self.model.config.save(p / "config.json")
-        save_flax_model_to_safetensors(self.state.params, p / "model.safetensors", self.model.config)
+        save_flax_model_to_safetensors(
+            self.state.params, p / "model.safetensors", self.model.config
+        )
         logger.info(f"Saved checkpoint to {p}")

@@ -78,7 +78,10 @@ def pad_to_patch(inputs: Tensor, mask: Tensor, patch_size: int) -> tuple[Tensor,
 
 
 def replace_extreme_values(x: Tensor, threshold: float, replacement: float = 0.0) -> Tensor:
-    return torch.where(torch.isfinite(x) & (x.abs() < threshold), x, torch.full_like(x, replacement))
+    """Clamp extreme or non-finite values to replacement value."""
+    return torch.where(
+        torch.isfinite(x) & (x.abs() < threshold), x, torch.full_like(x, replacement)
+    )
 
 
 def nonnegative_context(inputs: Tensor, observation_mask: Tensor) -> Tensor:
@@ -109,7 +112,9 @@ class TimestralForecaster:
         quantile_real_cap_k: float = 1e4,
         extreme_value_threshold: float = 1e30,
     ) -> None:
-        assert per_shot_horizon_patches >= 1, f"per_shot_horizon_patches must be >= 1, got {per_shot_horizon_patches}"
+        assert per_shot_horizon_patches >= 1, (
+            f"per_shot_horizon_patches must be >= 1, got {per_shot_horizon_patches}"
+        )
         self.model = model
         self.config = model.config
         self.max_context = max_context if max_context is not None else model.config.context_length
@@ -137,24 +142,34 @@ class TimestralForecaster:
         `path_or_repo_id` is a local directory or a Hugging Face Hub repo id. `revision`,
         `cache_dir`, `token` and `local_files_only` only apply to Hub repos.
         """
-        model = load_model(path_or_repo_id, device=device, revision=revision, cache_dir=cache_dir, token=token,
-                           local_files_only=local_files_only)
+        model = load_model(
+            path_or_repo_id,
+            device=device,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+        )
         return cls(model, max_context, per_shot_horizon_patches, quantile_real_cap_k)
 
     @property
     def patch_size(self) -> int:
+        """Patch size in time steps."""
         return self.config.patch_size
 
     @property
     def device(self) -> torch.device:
+        """PyTorch device of the underlying model."""
         return next(self.model.parameters()).device
 
     @property
     def supports_covariates(self) -> bool:
+        """Whether the model architecture supports conditioning on covariates."""
         return self.config.covariate_enabled
 
     @property
     def supports_known_covariates(self) -> bool:
+        """Whether the model supports known future covariates."""
         return self.config.supports_known_covariates
 
     @torch.inference_mode()
@@ -201,7 +216,9 @@ class TimestralForecaster:
         t = inputs.shape[-1]
         past = self._as_covariates(past_covariates, b, t, "past_covariates")
         known = self._as_covariates(known_covariates, b, t + prediction_length, "known_covariates")
-        cat_past = self._as_categorical(categorical_past_covariates, b, t, "categorical_past_covariates")
+        cat_past = self._as_categorical(
+            categorical_past_covariates, b, t, "categorical_past_covariates"
+        )
         cat_known = self._as_categorical(
             categorical_known_covariates, b, t + prediction_length, "categorical_known_covariates"
         )
@@ -210,7 +227,10 @@ class TimestralForecaster:
             target = self._encoding_target(inputs, mask)
             enc_past = self._encode_categorical(cat_past, target)
             enc_known = self._encode_categorical(cat_known, target)
-            covariates = {"past_covariates": _cat_rows(past, enc_past), "known_covariates": _cat_rows(known, enc_known)}
+            covariates = {
+                "past_covariates": _cat_rows(past, enc_past),
+                "known_covariates": _cat_rows(known, enc_known),
+            }
         # The mirrored pass forecasts -context with every covariate row negated. Target encodings
         # are linear in the target, so negating them gives the encodings against -context.
         mirrored_covariates = {name: _negate(rows) for name, rows in covariates.items()}
@@ -230,7 +250,9 @@ class TimestralForecaster:
             quantiles = torch.where(eligible[..., None, None], quantiles.clamp_min(0), quantiles)
         return Forecast(quantiles=quantiles, quantile_levels=self.quantile_levels)
 
-    def _as_context(self, context: ArrayLike, observation_mask: ArrayLike | None) -> tuple[Tensor, Tensor]:
+    def _as_context(
+        self, context: ArrayLike, observation_mask: ArrayLike | None
+    ) -> tuple[Tensor, Tensor]:
         x = torch.as_tensor(context, dtype=torch.float32, device=self.device)
         if x.dim() == 1:
             x = x[None, None]
@@ -239,7 +261,9 @@ class TimestralForecaster:
         assert x.dim() == 3, f"context must be (T,), (B, T) or (B, V, T), got {tuple(x.shape)}"
         mask = torch.isfinite(x)
         if observation_mask is not None:
-            user_mask = torch.as_tensor(observation_mask, dtype=torch.bool, device=self.device).reshape(x.shape)
+            user_mask = torch.as_tensor(
+                observation_mask, dtype=torch.bool, device=self.device
+            ).reshape(x.shape)
             mask = mask & user_mask
         return torch.where(mask, x, torch.zeros_like(x)), mask
 
@@ -257,7 +281,9 @@ class TimestralForecaster:
         in_window = torch.arange(t, device=inputs.device) >= t - self.max_context
         return torch.where(started & in_window, ffill_with_mask(inputs, mask)[:, 0], torch.nan)
 
-    def _encode_categorical(self, codes: Tensor | None, target_context: Tensor | None) -> Tensor | None:
+    def _encode_categorical(
+        self, codes: Tensor | None, target_context: Tensor | None
+    ) -> Tensor | None:
         """Target-encode `(B, C, L)` codes against `(B, T)` targets (NaN outside the encoding window); raw codes when None."""
         if codes is None or target_context is None:
             return codes.to(self.device, torch.float32) if codes is not None else None
@@ -270,28 +296,41 @@ class TimestralForecaster:
                 future = rows[i, j, t:] if rows.shape[-1] > t else None
                 past_enc, future_enc = target_encode(ctx[i], rows[i, j, :t], future)
                 # A missing code before the target starts is padding, not the missing category.
-                out[i, j, :t] = np.where(np.isnan(ctx[i]) & np.isnan(rows[i, j, :t]), np.nan, past_enc)
+                out[i, j, :t] = np.where(
+                    np.isnan(ctx[i]) & np.isnan(rows[i, j, :t]), np.nan, past_enc
+                )
                 if future_enc is not None:
                     out[i, j, t:] = future_enc
         return torch.from_numpy(out).to(self.device)
 
-    def _as_categorical(self, values: ArrayLike | None, batch: int, length: int, name: str) -> Tensor | None:
+    def _as_categorical(
+        self, values: ArrayLike | None, batch: int, length: int, name: str
+    ) -> Tensor | None:
         """Category codes as float64 on CPU, so that distinct codes past 2**24 stay distinct."""
         if values is None:
             return None
-        v = self._as_covariates(torch.as_tensor(values, dtype=torch.float64), batch, length, name, dtype=torch.float64)
+        v = self._as_covariates(
+            torch.as_tensor(values, dtype=torch.float64), batch, length, name, dtype=torch.float64
+        )
         if v is not None and torch.isinf(v).any():
             raise ValueError(f"{name} must hold finite codes or NaN; got an infinite value")
         return v.cpu() if v is not None else None
 
     def _as_covariates(
-        self, values: ArrayLike | None, batch: int, length: int, name: str, dtype: torch.dtype = torch.float32
+        self,
+        values: ArrayLike | None,
+        batch: int,
+        length: int,
+        name: str,
+        dtype: torch.dtype = torch.float32,
     ) -> Tensor | None:
         if values is None:
             return None
         if not self.supports_covariates:
             raise ValueError(f"this checkpoint was not trained with covariates; got {name}")
-        v = torch.as_tensor(values, dtype=dtype, device=self.device if dtype == torch.float32 else "cpu")
+        v = torch.as_tensor(
+            values, dtype=dtype, device=self.device if dtype == torch.float32 else "cpu"
+        )
         if v.dim() == 2:
             v = v[:, None]
         assert v.dim() == 3 and v.shape[0] == batch and v.shape[-1] == length, (
@@ -312,22 +351,34 @@ class TimestralForecaster:
         rows, mask, role_ids, known_future, known_future_mask, n_tgt = self._assemble_rows(
             inputs, observation_mask, prediction_length, past_covariates, known_covariates
         )
-        quantiles = self._block_ar_decode(rows, mask, prediction_length, role_ids, known_future, known_future_mask)
+        quantiles = self._block_ar_decode(
+            rows, mask, prediction_length, role_ids, known_future, known_future_mask
+        )
         quantiles = quantiles[:, :n_tgt]
         if self.quantile_real_cap_k > 0:
             quantiles = self._cap_quantiles(quantiles, rows[:, :n_tgt], mask[:, :n_tgt])
         if torch.isnan(quantiles).any():
-            raise ValueError(f"forecast produced {int(torch.isnan(quantiles).sum())} NaN values; the input is degenerate")
+            raise ValueError(
+                f"forecast produced {int(torch.isnan(quantiles).sum())} NaN values; the input is degenerate"
+            )
         return quantiles
 
     def _cap_quantiles(self, quantiles: Tensor, inputs: Tensor, observation_mask: Tensor) -> Tensor:
         not_obs = ~observation_mask
-        ctx_max = torch.nan_to_num(inputs.masked_fill(not_obs, float("-inf")).amax(-1, keepdim=True), neginf=0.0)
-        ctx_min = torch.nan_to_num(inputs.masked_fill(not_obs, float("inf")).amin(-1, keepdim=True), posinf=0.0)
+        ctx_max = torch.nan_to_num(
+            inputs.masked_fill(not_obs, float("-inf")).amax(-1, keepdim=True), neginf=0.0
+        )
+        ctx_min = torch.nan_to_num(
+            inputs.masked_fill(not_obs, float("inf")).amin(-1, keepdim=True), posinf=0.0
+        )
         c = self.config
-        _, scale = causal_patch_loc_scale(inputs, observation_mask, c.patch_size, c.minimum_scale, c.stabilize_with_global)
+        _, scale = causal_patch_loc_scale(
+            inputs, observation_mask, c.patch_size, c.minimum_scale, c.stabilize_with_global
+        )
         anchor_scale = scale[..., -1:] * self.quantile_real_cap_k
-        return quantiles.clamp((ctx_min - anchor_scale).unsqueeze(-1), (ctx_max + anchor_scale).unsqueeze(-1))
+        return quantiles.clamp(
+            (ctx_min - anchor_scale).unsqueeze(-1), (ctx_max + anchor_scale).unsqueeze(-1)
+        )
 
     def _assemble_rows(
         self,
@@ -349,7 +400,9 @@ class TimestralForecaster:
 
         n_past = 0
         if past_covariates is not None:
-            assert past_covariates.shape[-1] == ctx0, "past covariates must cover exactly the context"
+            assert past_covariates.shape[-1] == ctx0, (
+                "past covariates must cover exactly the context"
+            )
             n_past = past_covariates.shape[1]
             ctx_masks.append(~torch.isnan(past_covariates))
             ctx_rows.append(torch.nan_to_num(past_covariates, nan=0.0))
@@ -360,8 +413,13 @@ class TimestralForecaster:
         known_future_obs: Tensor | None = None
         if known_covariates is not None:
             n_known = known_covariates.shape[1]
-            kc_ctx, kc_fut = known_covariates[..., :-prediction_length], known_covariates[..., -prediction_length:]
-            assert kc_ctx.shape[-1] == ctx0, "known covariates must cover the context plus the horizon"
+            kc_ctx, kc_fut = (
+                known_covariates[..., :-prediction_length],
+                known_covariates[..., -prediction_length:],
+            )
+            assert kc_ctx.shape[-1] == ctx0, (
+                "known covariates must cover the context plus the horizon"
+            )
             ctx_masks.append(~torch.isnan(kc_ctx))
             ctx_rows.append(torch.nan_to_num(kc_ctx, nan=0.0))
             roles += [ROLE_KNOWN_COV] * n_known
@@ -427,15 +485,23 @@ class TimestralForecaster:
             block = min(self.per_shot_horizon_patches, remaining)
             blen = block * ps
             kf_block = known_future[:, offset : offset + blen] if known_future is not None else None
-            kfm_block = known_future_mask[:, offset : offset + blen] if known_future_mask is not None else None
-            quantiles = self.model.predict_block(context, mask, group_ids, block, role_ids, kf_block, kfm_block)
+            kfm_block = (
+                known_future_mask[:, offset : offset + blen]
+                if known_future_mask is not None
+                else None
+            )
+            quantiles = self.model.predict_block(
+                context, mask, group_ids, block, role_ids, kf_block, kfm_block
+            )
             quantiles = self._refine_block(quantiles, context, mask, target_rows)
             blocks.append(quantiles)
             remaining -= block
             offset += blen
             if remaining <= 0:
                 break
-            feedback = replace_extreme_values(quantiles[..., self.median_index], self.extreme_value_threshold)
+            feedback = replace_extreme_values(
+                quantiles[..., self.median_index], self.extreme_value_threshold
+            )
             feedback_mask = torch.ones_like(feedback, dtype=torch.bool)
             if role_ids is not None:
                 assert known_rows is not None and past_rows is not None
@@ -455,7 +521,9 @@ class TimestralForecaster:
         packed = torch.cat(blocks, dim=-2)[..., :prediction_length, :]
         return packed.reshape(b, v, prediction_length, -1)
 
-    def _refine_block(self, quantiles: Tensor, context: Tensor, mask: Tensor, target_rows: Tensor | None) -> Tensor:
+    def _refine_block(
+        self, quantiles: Tensor, context: Tensor, mask: Tensor, target_rows: Tensor | None
+    ) -> Tensor:
         """Move one decoded block from the anchor frame to the advancing refine frame it was trained in.
 
         The model denormalizes the whole block `(R, H * patch_size, Q)` with the frame of the
@@ -471,11 +539,17 @@ class TimestralForecaster:
         loc0, scale0 = loc[:, -1], scale[:, -1]
         median = quantiles[..., self.median_index].unflatten(-1, (n_pred, ps)).to(torch.float64)
         sinh_median = (median - loc0[:, None, None]) / scale0[:, None, None]
-        loc_j, scale_j = advancing_block_frames(context, mask, sinh_median, self.config.minimum_scale)
+        loc_j, scale_j = advancing_block_frames(
+            context, mask, sinh_median, self.config.minimum_scale
+        )
         first = torch.zeros(loc_j.shape, dtype=torch.bool, device=loc_j.device)
         first[:, 0] = True
-        loc_j = torch.where(first, loc0[:, None], loc_j.to(quantiles.dtype)).repeat_interleave(ps, dim=-1)
-        scale_j = torch.where(first, scale0[:, None], scale_j.to(quantiles.dtype)).repeat_interleave(ps, dim=-1)
+        loc_j = torch.where(first, loc0[:, None], loc_j.to(quantiles.dtype)).repeat_interleave(
+            ps, dim=-1
+        )
+        scale_j = torch.where(
+            first, scale0[:, None], scale_j.to(quantiles.dtype)
+        ).repeat_interleave(ps, dim=-1)
         sinh_norm = (quantiles - loc0[:, None, None]) / scale0[:, None, None]
         refined = clamp_nonfinite(sinh_norm * scale_j[..., None] + loc_j[..., None])
         if target_rows is not None:

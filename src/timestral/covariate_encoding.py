@@ -35,7 +35,9 @@ def target_encode(
     """
     target = np.asarray(target_context, dtype=np.float64)
     past_codes = np.asarray(past_codes, dtype=np.float64)
-    assert target.shape == past_codes.shape, f"target {target.shape} and codes {past_codes.shape} must align"
+    assert target.shape == past_codes.shape, (
+        f"target {target.shape} and codes {past_codes.shape} must align"
+    )
     observed = np.isfinite(target)
     target = np.where(observed, target, 0.0)
     item_count = float(observed.sum())
@@ -47,21 +49,31 @@ def target_encode(
     past_slots = _slots(past_codes, categories, nan_slot)
     sums = np.bincount(past_slots, weights=target * observed, minlength=nan_slot + 1)
     counts = np.bincount(past_slots, weights=observed.astype(np.float64), minlength=nan_slot + 1)
-    lookup = np.append((smooth * item_mean + sums) / (smooth + counts), item_mean)  # last entry: unseen
+    lookup = np.append(
+        (smooth * item_mean + sums) / (smooth + counts), item_mean
+    )  # last entry: unseen
 
     encoded_past = lookup[past_slots].astype(np.float32)
     if future_codes is None:
         return encoded_past, None
-    future_slots = _slots(np.asarray(future_codes, dtype=np.float64), categories, nan_slot, unseen=nan_slot + 1)
+    future_slots = _slots(
+        np.asarray(future_codes, dtype=np.float64), categories, nan_slot, unseen=nan_slot + 1
+    )
     return encoded_past, lookup[future_slots].astype(np.float32)
 
 
-def _slots(codes: np.ndarray, categories: np.ndarray, nan_slot: int, unseen: int | None = None) -> np.ndarray:
+def _slots(
+    codes: np.ndarray, categories: np.ndarray, nan_slot: int, unseen: int | None = None
+) -> np.ndarray:
     """Slot of each code in `categories`; NaN goes to `nan_slot`, unknown codes to `unseen`."""
     idx = np.searchsorted(categories, np.nan_to_num(codes, nan=0.0))
     idx = np.minimum(idx, max(len(categories) - 1, 0))
     known = np.isfinite(codes) & (len(categories) > 0)
     if len(categories) > 0:
         known &= categories[idx] == codes
-    assert unseen is not None or (known | np.isnan(codes)).all(), "every past code must be in categories"
-    return np.where(np.isnan(codes), nan_slot, np.where(known, idx, unseen if unseen is not None else 0)).astype(np.intp)
+    assert unseen is not None or (known | np.isnan(codes)).all(), (
+        "every past code must be in categories"
+    )
+    return np.where(
+        np.isnan(codes), nan_slot, np.where(known, idx, unseen if unseen is not None else 0)
+    ).astype(np.intp)

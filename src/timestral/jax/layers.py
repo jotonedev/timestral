@@ -5,9 +5,8 @@ All tensors use the packed layout: one row per variate of every series in the ba
 attention runs per patch over the rows of the same series.
 """
 
-from dataclasses import dataclass
 import math
-from typing import Optional, Tuple, Union
+from dataclasses import dataclass
 
 import flax.linen as nn
 import jax
@@ -19,16 +18,20 @@ from timestral.config import LAYER_KIND_AXES
 @dataclass(frozen=True)
 class TwoStreamMask:
     """Time mask over the `[Enc ; Dec]` sequence plus its split point."""
+
     mask: jax.Array  # (R, 1, S, S) bool, True = attend
     enc_len: int
 
 
 class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization."""
+
     dim: int
     eps: float = 1e-6
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
+        """Apply RMS normalization to input."""
         scale = self.param("scale", nn.initializers.ones, (self.dim,))
         xf = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(xf), axis=-1, keepdims=True)
@@ -38,6 +41,7 @@ class RMSNorm(nn.Module):
 
 class ResidualBlock(nn.Module):
     """`output(silu(hidden(x))) + residual(x)`, used by patch embedding and head."""
+
     input_dims: int
     hidden_dims: int
     output_dims: int
@@ -45,6 +49,7 @@ class ResidualBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
+        """Apply residual projection block."""
         hidden_layer = nn.Dense(self.hidden_dims, use_bias=self.use_bias, name="hidden_layer")
         output_layer = nn.Dense(self.output_dims, use_bias=self.use_bias, name="output_layer")
         residual_layer = nn.Dense(self.output_dims, use_bias=self.use_bias, name="residual_layer")
@@ -55,12 +60,14 @@ class ResidualBlock(nn.Module):
 
 class FusedSwiGLU(nn.Module):
     """SwiGLU MLP with one fused input projection: `w3(gate * silu(up))`."""
+
     embed_dim: int
     hidden_dim: int
     use_bias: bool = False
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
+        """Apply SwiGLU projection."""
         w12 = nn.Dense(2 * self.hidden_dim, use_bias=self.use_bias, name="w12")
         w3 = nn.Dense(self.embed_dim, use_bias=self.use_bias, name="w3")
 
@@ -70,11 +77,12 @@ class FusedSwiGLU(nn.Module):
 
 class SinCosRoPE(nn.Module):
     """Rotary position embedding (sin/cos concatenation) with partial rotation."""
+
     dim: int
     base: float
     rotary_dim: int
 
-    def __call__(self, x: jax.Array, position_ids: jax.Array) -> Tuple[jax.Array, jax.Array]:
+    def __call__(self, x: jax.Array, position_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
         """Return `(cos, sin)` tables, each `(R, N, head_dim)`."""
         inv_freq = jnp.zeros(self.dim // 2, dtype=jnp.float32)
         idx = jnp.arange(0, self.rotary_dim, 2, dtype=jnp.float32)
@@ -103,7 +111,7 @@ def _apply_rotary(
     k: jax.Array,
     cos: jax.Array,
     sin: jax.Array,
-) -> Tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array]:
     """Rotate `q`, `k` shaped `(batch, seq, heads, head_dim)`."""
     cos = jnp.expand_dims(cos, axis=2)
     sin = jnp.expand_dims(sin, axis=2)
@@ -116,7 +124,7 @@ def _sdpa(
     query: jax.Array,
     key: jax.Array,
     value: jax.Array,
-    mask: Optional[jax.Array] = None,
+    mask: jax.Array | None = None,
     is_causal: bool = False,
 ) -> jax.Array:
     """Scaled dot-product attention on `(batch, seq, heads, head_dim)`."""
@@ -125,7 +133,9 @@ def _sdpa(
     scale = 1.0 / math.sqrt(head_dim)
 
     # Compute scores: (batch, heads, q_len, k_len)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", query.astype(jnp.float32), key.astype(jnp.float32)) * scale
+    scores = (
+        jnp.einsum("bqhd,bkhd->bhqk", query.astype(jnp.float32), key.astype(jnp.float32)) * scale
+    )
 
     if is_causal:
         causal_mask = jnp.tril(jnp.ones((q_len, k_len), dtype=jnp.bool_))
@@ -142,6 +152,7 @@ def _sdpa(
 
 class Attention(nn.Module):
     """Multi-head attention over time (`is_time=True`) or variates."""
+
     embed_dim: int
     num_heads: int
     is_time: bool
@@ -152,10 +163,11 @@ class Attention(nn.Module):
     def __call__(
         self,
         x: jax.Array,
-        mask: Optional[Union[jax.Array, TwoStreamMask]] = None,
-        cos: Optional[jax.Array] = None,
-        sin: Optional[jax.Array] = None,
+        mask: jax.Array | TwoStreamMask | None = None,
+        cos: jax.Array | None = None,
+        sin: jax.Array | None = None,
     ) -> jax.Array:
+        """Compute multi-head attention over time or variate dimension."""
         head_dim = self.embed_dim // self.num_heads
         rows, num_patches, _ = x.shape
         inputs = x if self.is_time else jnp.swapaxes(x, 0, 1)  # (R, N, D) or (N, R, D)
@@ -199,6 +211,7 @@ class Attention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """Attention(s) of one layer kind, each a pre-norm residual, then one MLP."""
+
     kind: str
     embed_dim: int
     num_heads: int
@@ -210,6 +223,7 @@ class TransformerBlock(nn.Module):
     variate_attn_gate: str
 
     def setup(self):
+        """Initialize attention norms, attention layers, and SwiGLU MLP."""
         axes = LAYER_KIND_AXES[self.kind]
         self.attn_norms = [
             RMSNorm(dim=self.embed_dim, eps=self.norm_eps, name=f"attn_norms_{i}")
@@ -237,11 +251,12 @@ class TransformerBlock(nn.Module):
     def __call__(
         self,
         x: jax.Array,
-        time_mask: Optional[Union[jax.Array, TwoStreamMask]],
-        variate_mask: Optional[jax.Array],
+        time_mask: jax.Array | TwoStreamMask | None,
+        variate_mask: jax.Array | None,
         cos: jax.Array,
         sin: jax.Array,
     ) -> jax.Array:
+        """Execute transformer block forward pass."""
         for norm, attn in zip(self.attn_norms, self.attns):
             m = time_mask if attn.is_time else variate_mask
             x = x + attn(norm(x), m, cos, sin)
@@ -249,7 +264,9 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    block_schedule: Tuple[str, ...]
+    """Stack of Transformer blocks with Rotary Position Embeddings and RMSNorm."""
+
+    block_schedule: tuple[str, ...]
     embed_dim: int
     num_heads: int
     mlp_hidden_dim: int
@@ -262,6 +279,7 @@ class Transformer(nn.Module):
     variate_attn_gate: str
 
     def setup(self):
+        """Initialize transformer block layers, rotary embeddings, and final norm."""
         self.layers = [
             TransformerBlock(
                 kind=kind,
@@ -288,10 +306,11 @@ class Transformer(nn.Module):
     def __call__(
         self,
         x: jax.Array,
-        time_mask: Optional[Union[jax.Array, TwoStreamMask]],
-        variate_mask: Optional[jax.Array],
+        time_mask: jax.Array | TwoStreamMask | None,
+        variate_mask: jax.Array | None,
         positions: jax.Array,
     ) -> jax.Array:
+        """Execute forward pass through all transformer blocks."""
         cos, sin = self.rope(x, positions)
         for layer in self.layers:
             x = layer(x, time_mask, variate_mask, cos, sin)

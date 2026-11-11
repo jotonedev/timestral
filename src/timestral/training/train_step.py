@@ -1,10 +1,10 @@
 """JIT-compiled DHF training step and loss computation for Timestral."""
 
-from typing import Any, Dict, Tuple
-import flax.linen as nn
-from flax.training.train_state import TrainState
+from typing import Any
+
 import jax
 import jax.numpy as jnp
+from flax.training.train_state import TrainState
 
 from timestral.jax.model import ROLE_TARGET, TimestralModel
 from timestral.jax.scaler import apply_affine_asinh_masked
@@ -13,9 +13,9 @@ from timestral.training.losses import masked_pinball_loss
 
 def compute_dhf_loss(
     model: TimestralModel,
-    params: Dict[str, Any],
-    batch: Dict[str, jax.Array],
-) -> Tuple[jax.Array, Dict[str, jax.Array]]:
+    params: Any,
+    batch: dict[str, jax.Array],
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute Decoupled Horizon Forecasting (DHF) pinball loss on normalized targets.
 
     Args:
@@ -40,7 +40,7 @@ def compute_dhf_loss(
         role_ids = jnp.zeros((full_inputs.shape[0],), dtype=jnp.int32)
 
     # DHF training forward pass
-    normalized_preds, loc, scale = model.apply(
+    fwd_out: Any = model.apply(
         {"params": params},
         full_inputs,
         full_observed,
@@ -49,6 +49,7 @@ def compute_dhf_loss(
         role_ids,
         method=model.training_forward,
     )
+    normalized_preds, loc, scale = fwd_out
 
     # Compute normalized ground truth targets
     y_norm = apply_affine_asinh_masked(
@@ -79,12 +80,12 @@ def create_train_step(model: TimestralModel):
     @jax.jit
     def train_step(
         state: TrainState,
-        batch: Dict[str, jax.Array],
-    ) -> Tuple[TrainState, Dict[str, jax.Array]]:
+        batch: dict[str, jax.Array],
+    ) -> tuple[TrainState, dict[str, jax.Array]]:
         def loss_fn(params):
             return compute_dhf_loss(model, params, batch)
 
-        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        (_loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         new_state = state.apply_gradients(grads=grads)
         return new_state, metrics
 
@@ -97,8 +98,8 @@ def create_eval_step(model: TimestralModel):
     @jax.jit
     def eval_step(
         state: TrainState,
-        batch: Dict[str, jax.Array],
-    ) -> Dict[str, jax.Array]:
+        batch: dict[str, jax.Array],
+    ) -> dict[str, jax.Array]:
         _, metrics = compute_dhf_loss(model, state.params, batch)
         return metrics
 

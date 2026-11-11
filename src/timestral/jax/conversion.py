@@ -1,7 +1,8 @@
 """Bidirectional parameter conversion between PyTorch state_dict and Flax nested PyTree."""
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
+
 import numpy as np
 import safetensors.numpy as st_np
 
@@ -20,7 +21,9 @@ def _get_nested(d: dict, keys: list[str]) -> Any:
     return d
 
 
-def torch_to_flax_params(torch_state_dict: Dict[str, Any], config: TimestralConfig) -> Dict[str, Any]:
+def torch_to_flax_params(
+    torch_state_dict: dict[str, Any], config: TimestralConfig
+) -> dict[str, Any]:
     """Convert PyTorch state_dict to Flax nested dictionary structure.
 
     Dense weights are transposed from `(out_features, in_features)` to `(in_features, out_features)`.
@@ -62,12 +65,14 @@ def torch_to_flax_params(torch_state_dict: Dict[str, Any], config: TimestralConf
     return params
 
 
-def flax_to_torch_params(flax_params: Dict[str, Any], config: TimestralConfig) -> Dict[str, np.ndarray]:
+def flax_to_torch_params(
+    flax_params: dict[str, Any], config: TimestralConfig
+) -> dict[str, np.ndarray]:
     """Convert Flax nested parameters PyTree back to a flat PyTorch state dict mapping.
 
     Kernels are transposed back to `(out_features, in_features)`.
     """
-    flat: Dict[str, np.ndarray] = {}
+    flat: dict[str, np.ndarray] = {}
 
     def _recurse(d: dict, prefix: list[str]):
         for k, v in d.items():
@@ -95,7 +100,9 @@ def flax_to_torch_params(flax_params: Dict[str, Any], config: TimestralConfig) -
     return flat
 
 
-def load_flax_model_from_safetensors(path_or_file: str | Path, config: TimestralConfig) -> Dict[str, Any]:
+def load_flax_model_from_safetensors(
+    path_or_file: str | Path, config: TimestralConfig
+) -> dict[str, Any]:
     """Load Flax parameters from a safetensors file."""
     p = Path(path_or_file)
     if p.is_dir():
@@ -104,7 +111,9 @@ def load_flax_model_from_safetensors(path_or_file: str | Path, config: Timestral
     return torch_to_flax_params(tensors, config)
 
 
-def save_flax_model_to_safetensors(flax_params: Dict[str, Any], path_or_file: str | Path, config: TimestralConfig) -> None:
+def save_flax_model_to_safetensors(
+    flax_params: dict[str, Any], path_or_file: str | Path, config: TimestralConfig
+) -> None:
     """Save Flax parameters to a PyTorch-compatible safetensors file."""
     p = Path(path_or_file)
     if p.is_dir():

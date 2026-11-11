@@ -31,7 +31,9 @@ def enc_causal_mask(key_valid: Tensor) -> Tensor:
     return (causal[None] & key_valid[:, None, :]) | eye[None]
 
 
-def build_forecast_time_mask(context_len: int, horizon: int, key_valid: Tensor, device: torch.device) -> Tensor:
+def build_forecast_time_mask(
+    context_len: int, horizon: int, key_valid: Tensor, device: torch.device
+) -> Tensor:
     """`(R, 1, L+h, L+h)` time mask for one block without covariates.
 
     The encoder is causal; every decoder token reads the whole valid context and its
@@ -41,7 +43,9 @@ def build_forecast_time_mask(context_len: int, horizon: int, key_valid: Tensor, 
     enc = enc_causal_mask(key_valid)
     enc_dec = torch.zeros(rows, context_len, horizon, dtype=torch.bool, device=device)
     dec_enc = key_valid[:, None, :].expand(rows, horizon, context_len)
-    dec_dec = torch.tril(torch.ones(horizon, horizon, dtype=torch.bool, device=device))[None].expand(rows, horizon, horizon)
+    dec_dec = torch.tril(torch.ones(horizon, horizon, dtype=torch.bool, device=device))[
+        None
+    ].expand(rows, horizon, horizon)
     top = torch.cat([enc, enc_dec], dim=2)
     bottom = torch.cat([dec_enc, dec_dec], dim=2)
     return torch.cat([top, bottom], dim=1).unsqueeze(1)
@@ -53,7 +57,9 @@ def build_forecast_positions(context_len: int, horizon: int, first_obs: Tensor) 
     return p[None, :] - first_obs[:, None]
 
 
-def compute_block_layout(min_context: Tensor, n_patches: int, block_size: int) -> tuple[Tensor, Tensor]:
+def compute_block_layout(
+    min_context: Tensor, n_patches: int, block_size: int
+) -> tuple[Tensor, Tensor]:
     """Per decoder position: the anchor of its block and whether it is active (`p >= s`)."""
     device = min_context.device
     p = torch.arange(n_patches, device=device)[None, :]
@@ -101,7 +107,9 @@ def build_two_stream_time_mask(
     return torch.cat([top, bottom], dim=1).unsqueeze(1)
 
 
-def variate_firewall(r: int, device: torch.device, target_rows: Tensor | None, bidirectional_rows: Tensor | None) -> Tensor | None:
+def variate_firewall(
+    r: int, device: torch.device, target_rows: Tensor | None, bidirectional_rows: Tensor | None
+) -> Tensor | None:
     """`(R, R)` forbidden query-to-key row pairs, or None.
 
     - A covariate row may not read a target row (covariates are exogenous).

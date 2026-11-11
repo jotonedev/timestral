@@ -1,14 +1,13 @@
-import numpy as np
 import jax.numpy as jnp
-import pytest
+import numpy as np
 
+from timestral.data.dataset import SyntheticDataset, TimeSeriesDataset
 from timestral.data.synthetic import (
+    generate_multivariate_with_covariates,
     sample_kernelsynth_gp,
     sample_timesfm_components,
-    generate_multivariate_with_covariates,
     tsmixup,
 )
-from timestral.data.dataset import SyntheticDataset, TimeSeriesDataset
 
 
 def test_kernelsynth_gp_generation():
@@ -85,4 +84,3 @@ def test_timeseries_dataset_batches():
     assert "inputs" in batch
     assert "observed" in batch
     assert batch["inputs"].shape[-1] == 48
-

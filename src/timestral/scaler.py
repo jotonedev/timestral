@@ -47,9 +47,14 @@ def compute_causal_statistics(
                 lo, hi = 10.0 ** (-scale_factor_exponent), 10.0**scale_factor_exponent
                 global_den = (weights * observation_mask).sum(-1, keepdim=True).clamp_min(1.0)
                 global_means = torch.nan_to_num(weighted.sum(-1, keepdim=True) / global_den)
-                global_var = (((x - global_means) * weights * observation_mask) ** 2).sum(-1, keepdim=True) / global_den
+                global_var = (((x - global_means) * weights * observation_mask) ** 2).sum(
+                    -1, keepdim=True
+                ) / global_den
                 global_scale = torch.sqrt(global_var + minimum_scale).expand_as(scales)
-                floor = torch.max(torch.tensor(minimum_scale, device=scales.device, dtype=scales.dtype), global_scale * lo)
+                floor = torch.max(
+                    torch.tensor(minimum_scale, device=scales.device, dtype=scales.dtype),
+                    global_scale * lo,
+                )
                 scales = torch.clamp(scales, min=floor, max=global_scale * hi)
             means = means.to(data.dtype)
             scales = scales.to(data.dtype)
@@ -71,12 +76,18 @@ def causal_patch_loc_scale(
     Each patch uses the causal statistics at its last time step, i.e. everything
     observed up to the end of that patch.
     """
-    assert data.shape[-1] % patch_size == 0, f"length {data.shape[-1]} is not a multiple of patch_size {patch_size}"
+    assert data.shape[-1] % patch_size == 0, (
+        f"length {data.shape[-1]} is not a multiple of patch_size {patch_size}"
+    )
     with torch.no_grad():
-        means, scales = compute_causal_statistics(data, observation_mask, minimum_scale, stabilize_with_global)
+        means, scales = compute_causal_statistics(
+            data, observation_mask, minimum_scale, stabilize_with_global
+        )
         patch_means = means.unfold(-1, patch_size, patch_size)[..., -1]
         patch_scales = scales.unfold(-1, patch_size, patch_size)[..., -1]
-        return patch_means.repeat_interleave(patch_size, dim=-1), patch_scales.repeat_interleave(patch_size, dim=-1)
+        return patch_means.repeat_interleave(patch_size, dim=-1), patch_scales.repeat_interleave(
+            patch_size, dim=-1
+        )
 
 
 def _fp32_io(*dtypes: torch.dtype) -> tuple[torch.dtype, torch.dtype]:
@@ -200,7 +211,9 @@ def advancing_block_frames(
         scale = var.sqrt().clamp(min=minimum_scale)
         locs.append(mean)
         scales.append(scale)
-        folded = (sinh_median[:, h] * scale[:, None] + mean[:, None] - offset[:, None]).clamp(-clip, clip)
+        folded = (sinh_median[:, h] * scale[:, None] + mean[:, None] - offset[:, None]).clamp(
+            -clip, clip
+        )
         folded = folded + offset[:, None]
         b_mean = folded.mean(-1)
         b_m2 = (folded - b_mean[:, None]).square().sum(-1)
@@ -208,7 +221,9 @@ def advancing_block_frames(
     return torch.stack(locs, dim=1), torch.stack(scales, dim=1)
 
 
-def instance_norm_stats(values: Tensor, observation_mask: Tensor, minimum_scale: float) -> tuple[Tensor, Tensor, Tensor]:
+def instance_norm_stats(
+    values: Tensor, observation_mask: Tensor, minimum_scale: float
+) -> tuple[Tensor, Tensor, Tensor]:
     """Non-causal per-row mean/std over observed positions, for known-future covariates.
 
     Rows whose observed values are all 0 or 1 (indicator covariates) keep `loc=0`,

@@ -1,5 +1,8 @@
-"""Load exported checkpoints: a directory with `config.json` and `model.safetensors`, either on
-disk or in a Hugging Face Hub repo."""
+"""Load exported checkpoints.
+
+Supports a directory with `config.json` and `model.safetensors`, either on
+disk or in a Hugging Face Hub repo.
+"""
 
 from pathlib import Path
 

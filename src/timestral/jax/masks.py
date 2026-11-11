@@ -5,7 +5,6 @@ decoder tokens are forecast queries for the horizon patches. All masks are boole
 True meaning "may attend".
 """
 
-from typing import Optional, Tuple
 import jax
 import jax.numpy as jnp
 
@@ -41,7 +40,9 @@ def build_forecast_time_mask(context_len: int, horizon: int, key_valid: jax.Arra
     enc = enc_causal_mask(key_valid)
     enc_dec = jnp.zeros((rows, context_len, horizon), dtype=jnp.bool_)
     dec_enc = jnp.broadcast_to(key_valid[:, None, :], (rows, horizon, context_len))
-    dec_dec = jnp.broadcast_to(jnp.tril(jnp.ones((horizon, horizon), dtype=jnp.bool_))[None], (rows, horizon, horizon))
+    dec_dec = jnp.broadcast_to(
+        jnp.tril(jnp.ones((horizon, horizon), dtype=jnp.bool_))[None], (rows, horizon, horizon)
+    )
     top = jnp.concatenate([enc, enc_dec], axis=2)
     bottom = jnp.concatenate([dec_enc, dec_dec], axis=2)
     return jnp.expand_dims(jnp.concatenate([top, bottom], axis=1), axis=1)
@@ -53,7 +54,9 @@ def build_forecast_positions(context_len: int, horizon: int, first_obs: jax.Arra
     return p[None, :] - first_obs[:, None]
 
 
-def compute_block_layout(min_context: jax.Array, n_patches: int, block_size: int) -> Tuple[jax.Array, jax.Array]:
+def compute_block_layout(
+    min_context: jax.Array, n_patches: int, block_size: int
+) -> tuple[jax.Array, jax.Array]:
     """Per decoder position: the anchor of its block and whether it is active (`p >= s`)."""
     p = jnp.arange(n_patches)[None, :]
     s = min_context[:, None]
@@ -69,7 +72,7 @@ def build_two_stream_time_mask(
     n_patches: int,
     block_size: int,
     key_valid: jax.Array,
-    bidirectional_rows: Optional[jax.Array] = None,
+    bidirectional_rows: jax.Array | None = None,
 ) -> jax.Array:
     """`(R, 1, 2N, 2N)` time mask over a full `[Enc ; Dec]` window.
 
@@ -100,9 +103,9 @@ def build_two_stream_time_mask(
 
 def variate_firewall(
     r: int,
-    target_rows: Optional[jax.Array] = None,
-    bidirectional_rows: Optional[jax.Array] = None,
-) -> Optional[jax.Array]:
+    target_rows: jax.Array | None = None,
+    bidirectional_rows: jax.Array | None = None,
+) -> jax.Array | None:
     """`(R, R)` forbidden query-to-key row pairs, or None."""
     if target_rows is None and bidirectional_rows is None:
         return None
@@ -118,9 +121,9 @@ def build_two_stream_variate_mask(
     group_ids: jax.Array,
     enc_key_valid: jax.Array,
     n_dec: int,
-    target_rows: Optional[jax.Array] = None,
-    bidirectional_rows: Optional[jax.Array] = None,
-) -> Optional[jax.Array]:
+    target_rows: jax.Array | None = None,
+    bidirectional_rows: jax.Array | None = None,
+) -> jax.Array | None:
     """`(N_enc + N_dec, 1, R, R)` variate mask, or None for a single row."""
     r, _ = enc_key_valid.shape
     if r == 1:
@@ -149,13 +152,15 @@ def row_group_first_observed_patch(obs_per_patch: jax.Array, group_ids: jax.Arra
     rows, n = obs_per_patch.shape
     idx = jnp.broadcast_to(jnp.arange(n)[None, :], (rows, n))
     row_first = jnp.where(obs_per_patch, idx, n).min(axis=-1)  # (R,)
-    same_group = (group_ids[:, None] == group_ids[None, :])  # (R, R)
+    same_group = group_ids[:, None] == group_ids[None, :]  # (R, R)
     candidate_first = jnp.where(same_group, row_first[None, :], n)
     group_first = candidate_first.min(axis=-1)
     return jnp.minimum(group_first, n - 1)
 
 
-def group_first_observed_patch(obs_per_patch: jax.Array, group_inverse: jax.Array, n_groups: int) -> jax.Array:
+def group_first_observed_patch(
+    obs_per_patch: jax.Array, group_inverse: jax.Array, n_groups: int
+) -> jax.Array:
     """`(G,)` index of the earliest observed patch in any row of each series."""
     rows, n = obs_per_patch.shape
     idx = jnp.broadcast_to(jnp.arange(n)[None, :], (rows, n))
@@ -163,4 +168,3 @@ def group_first_observed_patch(obs_per_patch: jax.Array, group_inverse: jax.Arra
     out = jnp.full(n_groups, n, dtype=row_first.dtype)
     out = out.at[group_inverse].min(row_first)
     return jnp.minimum(out, n - 1)
-
